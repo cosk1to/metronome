@@ -348,7 +348,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 18</p>
+    <p class="version">version 19</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -448,9 +448,11 @@
       return m.unit === "pulse" ? 60 / state.bpm : 60 / state.bpm / m.groups[0];
     }
 
-    /* mêmes dimensions que celles utilisées pour dessiner (clientWidth/Height) */
+    /* Taille de la zone, relevée seulement au redimensionnement : la relire à chaque
+       image forcerait un calcul de mise en page (coûteux sur téléphone). */
+    const view = { w: 0, h: 0 };
     function resize() {
-      const w = stage.clientWidth, h = stage.clientHeight;
+      const w = (view.w = stage.clientWidth), h = (view.h = stage.clientHeight);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
@@ -571,11 +573,29 @@
       state.voices.push({ t: time, out });
     }
 
-    /* instant audio réellement entendu : latence annoncée par l'appareil, plus le
-       calage manuel (certains casques Bluetooth annoncent mal leur latence) */
+    /* Instant audio réellement entendu, pour l'affichage.
+       L'horloge audio (currentTime) avance par paquets de son — par à-coups, surtout
+       sur Android : le point sautillait. On suit donc l'horloge d'affichage, régulière,
+       calée en continu sur l'horloge audio grâce à getOutputTimestamp (qui donne aussi
+       l'instant réellement joué par le haut-parleur, latence de sortie comprise).
+       Le calage est lissé ; une grosse différence (reprise après arrêt) est prise d'un coup.
+       Plus le calage manuel (certains casques Bluetooth annoncent mal leur latence). */
+    let clockOffset = null; /* horloge audio − horloge d'affichage (s), lissé */
     function heardTime() {
       const ac = state.audio;
-      return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0) - state.offsetMs / 1000;
+      const manual = state.offsetMs / 1000;
+      if (ac.getOutputTimestamp && ac.state === "running") {
+        const ts = ac.getOutputTimestamp();
+        if (ts.contextTime > 0 && ts.performanceTime > 0) {
+          const off = ts.contextTime - ts.performanceTime / 1000;
+          clockOffset = clockOffset == null || Math.abs(off - clockOffset) > 0.03
+            ? off
+            : clockOffset + (off - clockOffset) * 0.1;
+          return performance.now() / 1000 + clockOffset - manual;
+        }
+      }
+      /* repli (navigateur ancien, ou flux audio pas encore ouvert) */
+      return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0) - manual;
     }
     /* Compteur de temps continu à l'instant t (2.5 = mi-chemin entre le 3e et le 4e
        temps), temps inégaux compris : c'est ce que suivent le chef et le pendule. */
@@ -1211,7 +1231,7 @@
     }
 
     function render() {
-      const w = stage.clientWidth, h = stage.clientHeight;
+      const { w, h } = view;
       ctx.clearRect(0, 0, w, h);
       /* à l'arrêt : position de départ de la préparation (levée : le dernier temps ;
          décompte : le 1 de la mesure de décompte) */
