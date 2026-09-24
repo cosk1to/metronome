@@ -167,6 +167,8 @@
       cursor: pointer; list-style-position: inside;
     }
     .calib summary span { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: .4em; }
+    .calib-line { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; }
+    .calib-line select { flex: 1; }
     .calib-body { display: flex; gap: 8px; align-items: center; }
     .calib p { margin: 8px 0 12px; font-size: .8rem; line-height: 1.5; }
     #offMinus, #offPlus { width: 44px; padding: 0; font-size: 1.2rem; }
@@ -210,7 +212,7 @@
     <section class="stage" id="stage">
       <canvas id="c"></canvas>
       <div class="hud">
-        <div class="bpm-big"><span id="bpmView">92</span> <small>BPM</small></div>
+        <div class="bpm-big"><span id="bpmView">92</span> <small id="unitView">BPM</small></div>
         <div class="sig"><b id="sigView">4/4</b></div>
       </div>
       <div class="beat-label" id="beatView">prêt</div>
@@ -218,9 +220,9 @@
     <section class="controls">
       <div class="row tempo">
         <button id="minus" aria-label="Ralentir de 1 BPM">−</button>
-        <input id="bpm" type="range" min="40" max="220" value="92" aria-label="Tempo" />
+        <input id="bpm" type="range" min="20" max="300" value="92" aria-label="Tempo" />
         <button id="plus" aria-label="Accélérer de 1 BPM">+</button>
-        <input id="bpmNum" class="bpm-num" type="number" inputmode="numeric" min="40" max="220" value="92" aria-label="Tempo en BPM" />
+        <input id="bpmNum" class="bpm-num" type="number" inputmode="numeric" min="20" max="300" value="92" aria-label="Tempo en BPM" />
         <button id="tap">Tap tempo</button>
       </div>
       <div class="row settings">
@@ -237,9 +239,15 @@
           <option value="5/4b">5/4 (2+3)</option>
           <option value="6/8">6/8 battu à 6</option>
           <option value="6/8f">6/8 battu à 2</option>
+          <option value="9/8">9/8 battu à 3</option>
+          <option value="12/8">12/8 battu à 4</option>
+          <option value="7/8a">7/8 (2+2+3)</option>
+          <option value="7/8b">7/8 (3+2+2)</option>
+          <option value="7/8c">7/8 (2+3+2)</option>
         </select>
+        <!-- options reconstruites selon la mesure (valeur = clics par pulsation, 0 = temps seuls) -->
         <select id="sub" aria-label="Subdivision">
-          <option value="1">Temps seuls</option>
+          <option value="0">Temps seuls</option>
           <option value="2">+ croches</option>
           <option value="3">+ triolets</option>
           <option value="4">+ doubles croches</option>
@@ -247,7 +255,15 @@
         <button id="sound" class="active" aria-pressed="true">🔊 Son</button>
       </div>
       <details class="calib">
-        <summary>Calage image / son : <span id="offsetView">0 ms</span></summary>
+        <summary>Réglages : <span id="settingsView">levée · calage 0 ms</span></summary>
+        <label class="calib-line">Départ
+          <select id="prep">
+            <option value="levee">levée muette (1 temps)</option>
+            <option value="1">1 mesure de décompte</option>
+            <option value="2">2 mesures de décompte</option>
+          </select>
+        </label>
+        <div class="calib-line">Calage image / son</div>
         <div class="calib-body">
           <button id="offMinus" aria-label="Image 5 ms plus tôt">−</button>
           <input id="offset" type="range" min="-150" max="400" step="5" value="0"
@@ -268,7 +284,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 3</p>
+    <p class="version">version 4</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -289,6 +305,8 @@
     const LOOKAHEAD = 0.12;   /* s : horizon de programmation des clics */
     const TICK_MS = 25;       /* période du planificateur */
     const START_DELAY = 0.05; /* s : marge pour que le premier clic ne soit pas tronqué */
+    /* 20 : adagios très lents ; 300 : mesures irrégulières comptées à la croche */
+    const BPM_MIN = 20, BPM_MAX = 300;
 
     const state = {
       running: false,
@@ -296,25 +314,57 @@
       mode: "chef",
       sig: "4/4",
       beats: 4,
-      sub: 1,
+      sub: 0,       /* clics par pulsation ; 0 = temps seuls */
       sound: true,
+      prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
       flash: 0,
       flashAt: -Infinity, /* instant audio du dernier temps affiché */
       taps: [],
       audio: null,
-      beatZero: 0,
+      beatZero: 0,  /* instant audio du 1er temps */
+      audibleFrom: 0, /* 1re pulsation qui sonne (négative = décompte audible) */
       schedSub: null,
       voices: [],   /* clics programmés : { t, out } */
       pending: [],  /* temps à afficher quand ils sont entendus : { t } */
     };
 
-    function beatsFor(sig) {
-      if (sig === "3/4") return 3;
-      if (sig === "2/4" || sig === "6/8f") return 2;
-      if (sig === "5/4" || sig === "5/4b") return 5;
-      if (sig === "6/8") return 6;
-      return 4;
+    /* Subdivisions qui ont un sens dans chaque famille de mesures
+       (clé = clics par pulsation, 0 = temps seuls). */
+    const SUBS_QUARTER = { 0: "Temps seuls", 2: "+ croches", 3: "+ triolets", 4: "+ doubles croches" };
+    const SUBS_EIGHTH = { 0: "Temps seuls", 2: "+ doubles croches" };                 /* temps = croche */
+    const SUBS_GROUPED = { 0: "Temps seuls", 1: "+ croches", 2: "+ doubles croches" }; /* temps = 2 ou 3 croches */
+
+    /* Mesures. groups = nombre de pulsations (croches…) dans chaque temps : les temps
+       peuvent être inégaux (7/8). unit = ce que compte le BPM : "beat" (le temps)
+       ou "pulse" (la croche, usage courant pour les mesures irrégulières). */
+    const METERS = {
+      "4/4":  { groups: [1, 1, 1, 1], unit: "beat", note: "", label: "4/4", subs: SUBS_QUARTER },
+      "3/4":  { groups: [1, 1, 1], unit: "beat", note: "", label: "3/4", subs: SUBS_QUARTER },
+      "2/4":  { groups: [1, 1], unit: "beat", note: "", label: "2/4", subs: SUBS_QUARTER },
+      "5/4":  { groups: [1, 1, 1, 1, 1], unit: "beat", note: "", label: "5/4 (3+2)", subs: SUBS_QUARTER },
+      "5/4b": { groups: [1, 1, 1, 1, 1], unit: "beat", note: "", label: "5/4 (2+3)", subs: SUBS_QUARTER },
+      "6/8":  { groups: [1, 1, 1, 1, 1, 1], unit: "beat", note: "♪", label: "6/8 à 6", subs: SUBS_EIGHTH },
+      "6/8f": { groups: [3, 3], unit: "beat", note: "♩.", label: "6/8 à 2", subs: SUBS_GROUPED },
+      "9/8":  { groups: [3, 3, 3], unit: "beat", note: "♩.", label: "9/8 à 3", subs: SUBS_GROUPED },
+      "12/8": { groups: [3, 3, 3, 3], unit: "beat", note: "♩.", label: "12/8 à 4", subs: SUBS_GROUPED },
+      "7/8a": { groups: [2, 2, 3], unit: "pulse", note: "♪", label: "7/8 (2+2+3)", subs: SUBS_GROUPED },
+      "7/8b": { groups: [3, 2, 2], unit: "pulse", note: "♪", label: "7/8 (3+2+2)", subs: SUBS_GROUPED },
+      "7/8c": { groups: [2, 3, 2], unit: "pulse", note: "♪", label: "7/8 (2+3+2)", subs: SUBS_GROUPED },
+    };
+    /* dérivés : début de chaque temps (en pulsations) et longueur de la mesure */
+    Object.values(METERS).forEach((m) => {
+      let acc = 0;
+      m.starts = m.groups.map((g) => (acc += g) - g);
+      m.len = acc;
+      m.isStart = Array.from({ length: m.len }, (_, q) => m.starts.includes(q));
+    });
+    const meter = () => METERS[state.sig];
+    const mod = (a, b) => ((a % b) + b) % b;
+    /* durée d'une pulsation (s) : le BPM compte soit le temps, soit la croche */
+    function pulseDur() {
+      const m = meter();
+      return m.unit === "pulse" ? 60 / state.bpm : 60 / state.bpm / m.groups[0];
     }
 
     /* mêmes dimensions que celles utilisées pour dessiner (clientWidth/Height) */
@@ -373,28 +423,39 @@
       const ac = state.audio;
       return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0) - state.offsetMs / 1000;
     }
+    /* Compteur de temps continu à l'instant t (2.5 = mi-chemin entre le 3e et le 4e
+       temps), temps inégaux compris : c'est ce que suivent le chef et le pendule. */
     function beatsAt(t) {
-      return (t - state.beatZero) / (60 / state.bpm);
+      const m = meter();
+      const p = (t - state.beatZero) / pulseDur();   /* pulsations depuis le 1er temps */
+      const bar = Math.floor(p / m.len);
+      const q = p - bar * m.len;                      /* position dans la mesure */
+      let i = m.groups.length - 1;
+      while (i > 0 && m.starts[i] > q) i--;
+      return bar * m.groups.length + i + (q - m.starts[i]) / m.groups[i];
     }
 
     /* Planificateur « deux horloges » : un minuteur régulier programme chaque clic
-       à son heure exacte sur l'horloge audio, LOOKAHEAD secondes à l'avance. */
+       à son heure exacte sur l'horloge audio, LOOKAHEAD secondes à l'avance.
+       Grille = pulsation / k ; indices négatifs = préparation avant le 1er temps. */
     function schedule() {
       if (!state.running || !state.audio) return;
+      const m = meter();
+      const k = Math.max(1, state.sub);               /* clics par pulsation */
+      const gridDur = pulseDur() / k;
       const now = state.audio.currentTime;
-      const subDur = 60 / state.bpm / state.sub;
       /* dernier index déjà passé : après un retard (onglet caché…), on reprend
          ici au lieu de rejouer d'un coup tout ce qui a été manqué */
-      const due = Math.floor((now - state.beatZero) / subDur);
+      const due = Math.floor((now - state.beatZero) / gridDur);
       if (state.schedSub == null || state.schedSub < due) state.schedSub = due;
-      while (state.beatZero + (state.schedSub + 1) * subDur < now + LOOKAHEAD) {
-        state.schedSub++;
-        if (state.schedSub < 0) continue; /* temps de préparation : muet */
-        const t = state.beatZero + state.schedSub * subDur;
-        const isBeat = state.schedSub % state.sub === 0;
-        const beatNum = Math.floor(state.schedSub / state.sub);
-        const inBar = ((beatNum % state.beats) + state.beats) % state.beats;
-        clickAt(t, !isBeat ? 0 : inBar === 0 ? 2 : 1);
+      while (state.beatZero + (state.schedSub + 1) * gridDur < now + LOOKAHEAD) {
+        const j = ++state.schedSub;
+        if (j < state.audibleFrom * k) continue;      /* levée muette */
+        const t = state.beatZero + j * gridDur;
+        const q = mod(Math.floor(j / k), m.len);      /* pulsation dans la mesure */
+        const isBeat = j % k === 0 && m.isStart[q];
+        if (!isBeat && state.sub === 0) continue;     /* temps seuls */
+        clickAt(t, !isBeat ? 0 : q === 0 ? 2 : 1);
         if (isBeat) state.pending.push({ t });
       }
       state.voices = state.voices.filter((v) => v.t > now - 0.5);
@@ -462,18 +523,28 @@
       if (document.visibilityState === "visible" && state.running) keepAwake(true);
     });
 
+    /* (re)part du début de la mesure, précédé de la préparation :
+       - levée : 1 temps muet, le dernier de la mesure (le plus long en 7/8 2+2+3) ;
+       - décompte : 1 ou 2 mesures entières, audibles, accent sur le 1. */
+    function beginBar() {
+      const m = meter();
+      const levee = state.prep === "levee";
+      const prep = levee ? m.groups[m.groups.length - 1] : m.len * Number(state.prep);
+      state.audibleFrom = levee ? 0 : -prep;
+      state.beatZero = state.audio.currentTime + START_DELAY + prep * pulseDur();
+      state.schedSub = null;
+      state.pending = [];
+      $("beatView").textContent = levee ? "préparation" : "décompte";
+      schedule();
+    }
+
     function start() {
       const ac = ensureAudio();
       if (!ac) { $("beatView").textContent = "audio indisponible"; return; }
       state.running = true;
-      /* un temps de préparation avant le 1, comme la levée du chef */
-      state.beatZero = ac.currentTime + START_DELAY + 60 / state.bpm;
-      state.schedSub = null;
-      state.pending = [];
       $("start").textContent = "Arrêter";
       $("start").classList.add("stop");
-      $("beatView").textContent = "préparation";
-      schedule();
+      beginBar();
       ticker.start();
       keepAwake(true);
     }
@@ -497,58 +568,66 @@
       schedule();
     }
 
+    /* Réglages retrouvés d'une ouverture à l'autre (mémorisés sur l'appareil) */
+    const SETTINGS_KEY = "metronome-reglages";
+    function saveSettings() {
+      if (!ready) return; /* pas pendant la restauration au démarrage */
+      const { bpm, mode, sig, sub, sound, prep } = state;
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ bpm, mode, sig, sub, sound, prep })); } catch (err) {}
+    }
+    function loadSettings() {
+      try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (err) { return {}; }
+    }
+
     $("start").onclick = toggle;
-    $("sound").onclick = () => {
-      state.sound = !state.sound;
-      $("sound").textContent = state.sound ? "🔊 Son" : "🔇 Muet";
-      $("sound").setAttribute("aria-pressed", state.sound);
-      $("sound").classList.toggle("active", state.sound);
+    function setSound(on) {
+      state.sound = on;
+      $("sound").textContent = on ? "🔊 Son" : "🔇 Muet";
+      $("sound").setAttribute("aria-pressed", on);
+      $("sound").classList.toggle("active", on);
       resched();
-    };
+      saveSettings();
+    }
+    $("sound").onclick = () => setSound(!state.sound);
 
     function setBpm(v) {
       const n = Number(v);
       /* champ vide ou invalide : on garde le tempo actuel */
       if (v === "" || !Number.isFinite(n)) { $("bpmNum").value = state.bpm; return; }
-      const next = Math.max(40, Math.min(220, Math.round(n)));
+      const next = Math.max(BPM_MIN, Math.min(BPM_MAX, Math.round(n)));
       const changed = next !== state.bpm;
       if (state.running && state.audio && changed) {
         /* garde la position dans la mesure ; seuls les clics pas encore joués sont reprogrammés */
         const now = state.audio.currentTime;
-        const beats = (now - state.beatZero) * state.bpm / 60;
-        state.beatZero = now - beats * 60 / next;
+        const pos = (now - state.beatZero) / pulseDur();  /* en pulsations, ancien tempo */
+        state.bpm = next;
+        state.beatZero = now - pos * pulseDur();
       }
       state.bpm = next;
       if (changed) { resched(); invalidate(); } /* la masse du pendule bouge avec le tempo */
       $("bpm").value = state.bpm;
       $("bpmNum").value = state.bpm;
       $("bpmView").textContent = state.bpm;
+      if (changed) saveSettings();
     }
     $("bpm").oninput = (e) => setBpm(e.target.value);
     $("bpmNum").onchange = (e) => setBpm(e.target.value);
     $("minus").onclick = () => setBpm(state.bpm - 1);
     $("plus").onclick = () => setBpm(state.bpm + 1);
 
-    /* Subdivisions qui ont un sens musical dans chaque mesure (valeur = clics par temps).
-       6/8 battu à 6 : le temps est une croche → 2 par temps = doubles croches.
-       6/8 battu à 2 : le temps est une noire pointée → 3 par temps = croches. */
-    const SUB_CHOICES = {
-      default: { 1: "Temps seuls", 2: "+ croches", 3: "+ triolets", 4: "+ doubles croches" },
-      "6/8": { 1: "Temps seuls", 2: "+ doubles croches" },
-      "6/8f": { 1: "Temps seuls", 3: "+ croches" },
-    };
+    /* Menu des subdivisions reconstruit pour la mesure choisie. On garde le choix
+       de même nom s'il existe (« + croches » en 4/4 → « + croches » en 9/8). */
     function updateSubOptions() {
-      const choices = SUB_CHOICES[state.sig] || SUB_CHOICES.default;
-      for (const opt of $("sub").options) {
-        const label = choices[opt.value];
-        opt.hidden = opt.disabled = !label;
-        if (label) opt.textContent = label;
+      const sel = $("sub");
+      const prev = sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : "";
+      sel.innerHTML = "";
+      let pick = 0;
+      for (const [key, label] of Object.entries(meter().subs)) {
+        sel.add(new Option(label, key));
+        if (label === prev) pick = +key;
       }
-      if (!choices[state.sub]) {
-        /* choix impossible dans cette mesure : on prend la subdivision disponible */
-        state.sub = state.sub > 1 ? +Object.keys(choices).pop() : 1;
-        $("sub").value = state.sub;
-      }
+      sel.value = String(pick);
+      state.sub = pick;
     }
 
     /* consigne de lecture propre à chaque mode */
@@ -559,16 +638,24 @@
     $("mode").onchange = (e) => {
       state.mode = e.target.value;
       $("hint").textContent = HINTS[state.mode];
+      saveSettings();
     };
     $("sig").onchange = (e) => {
       state.sig = e.target.value;
-      state.beats = beatsFor(state.sig);
-      const labels = { "6/8": "6/8 à 6", "6/8f": "6/8 à 2", "5/4": "5/4 (3+2)", "5/4b": "5/4 (2+3)" };
-      $("sigView").textContent = labels[state.sig] || state.sig;
+      const m = meter();
+      state.beats = m.groups.length;
+      $("sigView").textContent = m.label;
+      $("unitView").textContent = m.note ? "BPM " + m.note : "BPM"; /* ce que compte le tempo */
       updateSubOptions();
-      resched();
+      /* en cours de lecture, la nouvelle mesure repart proprement du 1, avec sa préparation */
+      if (state.running) { cancelFuture(); beginBar(); }
+      saveSettings();
     };
-    $("sub").onchange = (e) => { state.sub = +e.target.value; resched(); };
+    $("sub").onchange = (e) => {
+      state.sub = +e.target.value; /* 0 = temps seuls */
+      resched();
+      saveSettings();
+    };
 
     /* calage image/son, mémorisé sur l'appareil (il dépend du casque / de l'enceinte) */
     const OFFSET_KEY = "metronome-calage-ms";
@@ -577,8 +664,21 @@
       if (!Number.isFinite(n)) return;
       state.offsetMs = Math.max(-150, Math.min(400, Math.round(n / 5) * 5));
       $("offset").value = state.offsetMs;
-      $("offsetView").textContent = (state.offsetMs > 0 ? "+" : "") + state.offsetMs + " ms";
+      updateSettingsView();
       try { localStorage.setItem(OFFSET_KEY, String(state.offsetMs)); } catch (err) {}
+    }
+
+    /* départ : levée muette ou mesures de décompte */
+    const PREPS = { levee: "levée", 1: "décompte 1 mesure", 2: "décompte 2 mesures" };
+    $("prep").onchange = (e) => {
+      state.prep = e.target.value;
+      updateSettingsView();
+      saveSettings();
+    };
+    /* résumé visible même quand les réglages sont repliés */
+    function updateSettingsView() {
+      const ms = (state.offsetMs > 0 ? "+" : "") + state.offsetMs + " ms";
+      $("settingsView").textContent = `${PREPS[state.prep]} · calage ${ms}`;
     }
     $("offset").oninput = (e) => setOffset(e.target.value);
     $("offMinus").onclick = () => setOffset(state.offsetMs - 5);
@@ -587,7 +687,8 @@
 
     function tapTempo() {
       const now = performance.now();
-      state.taps = state.taps.filter((t) => now - t < 2500);
+      /* frappes gardées 3,5 s : assez pour mesurer jusqu'à ~17 BPM */
+      state.taps = state.taps.filter((t) => now - t < 3500);
       state.taps.push(now);
       if (state.taps.length >= 2) {
         const diffs = [];
@@ -656,7 +757,9 @@
       ],
     };
     function patternFor(sig) {
-      return PATTERNS[sig] || PATTERNS[beatsFor(sig)];
+      /* schéma propre (5/4, 6/8 à 6) ou schéma standard selon le nombre de temps :
+         9/8 et 7/8 se battent à 3, 12/8 à 4 */
+      return PATTERNS[sig] || PATTERNS[METERS[sig].groups.length];
     }
 
     /* Trajet balistique entre deux ictus, comme une balle qui rebondit :
@@ -772,7 +875,7 @@
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -len); ctx.stroke();
 
       /* masse coulissante, comme sur un métronome mécanique : plus haut = plus lent */
-      const wy = -len * (0.3 + 0.45 * (220 - state.bpm) / 180);
+      const wy = -len * (0.3 + 0.45 * (BPM_MAX - state.bpm) / (BPM_MAX - BPM_MIN));
       ctx.fillStyle = C.muted;
       ctx.beginPath();
       ctx.moveTo(-10 * k, wy - 9 * k); ctx.lineTo(10 * k, wy - 9 * k);
@@ -869,12 +972,19 @@
       }
       requestAnimationFrame(loop);
     }
-    /* au rechargement, le navigateur peut restaurer les menus et le curseur :
-       on part de ce qu'ils affichent pour rester cohérent (mode, texte, mesure…) */
+    /* Démarrage : réglages mémorisés s'il y en a (valeurs vérifiées), sinon ce
+       qu'affichent les commandes (le navigateur peut les avoir restaurées). */
+    const saved = loadSettings();
+    if (saved.mode in HINTS) $("mode").value = saved.mode;
+    if (saved.sig in METERS) $("sig").value = saved.sig;
     $("mode").onchange({ target: $("mode") });
-    $("sig").onchange({ target: $("sig") });
+    $("sig").onchange({ target: $("sig") });            /* reconstruit le menu des subdivisions */
+    if ([...$("sub").options].some((o) => o.value === String(saved.sub))) $("sub").value = String(saved.sub);
     $("sub").onchange({ target: $("sub") });
-    setBpm($("bpm").value);
+    setBpm(Number.isFinite(saved.bpm) ? saved.bpm : $("bpm").value);
+    if (saved.sound === false) setSound(false);
+    if (saved.prep in PREPS) $("prep").value = saved.prep;
+    $("prep").onchange({ target: $("prep") });
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
     setOffset(savedOffset);
