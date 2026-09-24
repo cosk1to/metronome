@@ -349,7 +349,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 16</p>
+    <p class="version">version 17</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -471,7 +471,15 @@
         try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (err) {}
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC) return null;
-        try { state.audio = new AC(); } catch (err) { return null; }
+        /* "playback" : réserve de son plus grande, prévue pour la lecture. Le flux
+           résiste mieux quand le système ralentit l'app (ex. doigt maintenu sur la
+           notification de plein écran : sinon grésillement) et consomme moins. Le
+           retard ajouté est compensé à l'affichage (heardTime) ; les clics restent
+           programmés à l'instant exact. */
+        try { state.audio = new AC({ latencyHint: "playback" }); }
+        catch (err) {
+          try { state.audio = new AC(); } catch (err2) { return null; } /* anciens Safari */
+        }
       }
       /* "suspended", ou "interrupted" sur Safari */
       if (state.audio.state !== "running") {
