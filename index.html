@@ -338,7 +338,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 14</p>
+    <p class="version">version 15</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -360,8 +360,15 @@
       return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${a})`;
     }
 
-    const LOOKAHEAD = 0.12;   /* s : horizon de programmation des clics */
-    const TICK_MS = 25;       /* période du planificateur */
+    /* Planification : période du minuteur (ms) et horizon de programmation des clics (s).
+       Écran éteint ou page cachée, personne ne regarde ni ne change le tempo : on
+       programme plus loin à l'avance et on réveille le processeur 4 fois par seconde au
+       lieu de 40 (batterie). Chaque clic reste programmé à son instant exact. */
+    const TIMING = {
+      visible: { tick: 25, lookahead: 0.12 },
+      hidden: { tick: 250, lookahead: 1.0 }, /* tolère aussi un minuteur ralenti par le système */
+    };
+    let timing = TIMING.visible;
     const START_DELAY = 0.05; /* s : marge pour que le premier clic ne soit pas tronqué */
     /* 20 : adagios très lents ; 300 : mesures irrégulières comptées à la croche */
     const BPM_MIN = 20, BPM_MAX = 300;
@@ -551,7 +558,7 @@
     }
 
     /* Planificateur « deux horloges » : un minuteur régulier programme chaque clic
-       à son heure exacte sur l'horloge audio, LOOKAHEAD secondes à l'avance.
+       à son heure exacte sur l'horloge audio, timing.lookahead secondes à l'avance.
        Grille = pulsation / k ; indices négatifs = préparation avant le 1er temps. */
     function schedule() {
       if (!state.running || !state.audio) return;
@@ -563,7 +570,7 @@
          ici au lieu de rejouer d'un coup tout ce qui a été manqué */
       const due = Math.floor((now - state.beatZero) / gridDur);
       if (state.schedSub == null || state.schedSub < due) state.schedSub = due;
-      while (state.beatZero + (state.schedSub + 1) * gridDur < now + LOOKAHEAD) {
+      while (state.beatZero + (state.schedSub + 1) * gridDur < now + timing.lookahead) {
         const j = ++state.schedSub;
         if (j < state.visibleFrom * k) continue;      /* levée : aucun temps marqué */
         const t = state.beatZero + j * gridDur;
@@ -593,8 +600,9 @@
       }
       return {
         start() {
-          if (worker) worker.postMessage(TICK_MS);
-          else if (id == null) id = setInterval(schedule, TICK_MS);
+          /* (re)démarre à la période en vigueur : sert aussi à en changer */
+          if (worker) worker.postMessage(timing.tick);
+          else { clearInterval(id); id = setInterval(schedule, timing.tick); }
         },
         stop() {
           if (worker) worker.postMessage(0);
@@ -603,6 +611,13 @@
         },
       };
     })();
+
+    /* écran éteint / rallumé : bascule entre les deux réglages de planification */
+    function applyTiming() {
+      timing = document.visibilityState === "hidden" ? TIMING.hidden : TIMING.visible;
+      if (state.running) { ticker.start(); schedule(); }
+    }
+    document.addEventListener("visibilitychange", applyTiming);
 
     /* annule les clics programmés pas encore joués */
     function cancelFuture() {
