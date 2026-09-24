@@ -263,7 +263,7 @@
             <option value="2">2 mesures de décompte</option>
           </select>
         </label>
-        <div class="calib-line">Calage image / son</div>
+        <div class="calib-line">Calage image / son (Bluetooth)</div>
         <div class="calib-body">
           <button id="offMinus" aria-label="Image 5 ms plus tôt">−</button>
           <input id="offset" type="range" min="-150" max="400" step="5" value="0"
@@ -271,9 +271,11 @@
           <button id="offPlus" aria-label="Image 5 ms plus tard">+</button>
           <button id="offReset">0</button>
         </div>
-        <p>Lance le métronome avec le son. Si le point rebondit <b>avant</b> le clic,
-          appuie sur + ; s'il rebondit <b>après</b>, sur −. Réglage mémorisé sur cet
-          appareil : à refaire si tu changes de casque ou d'enceinte.</p>
+        <p>Surtout utile avec un <b>casque ou une enceinte Bluetooth</b>, qui retardent
+          le son. Avec le haut-parleur de l'appareil, laisse 0.<br>
+          Lance le métronome avec le son : si le point rebondit <b>avant</b> le clic,
+          appuie sur + ; s'il rebondit <b>après</b>, sur −. Mémorisé sur cet appareil :
+          à refaire si tu changes de casque ou d'enceinte.</p>
       </details>
     </section>
   </main>
@@ -284,7 +286,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 4</p>
+    <p class="version">version 5</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
