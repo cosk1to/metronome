@@ -1,8 +1,9 @@
 /* Service worker : garde l'app en cache pour qu'elle marche hors connexion.
-   La page est toujours rechargée depuis le réseau quand il y en a un, donc une
-   nouvelle version en ligne est prise tout de suite. Changer VERSION seulement
-   si les icônes ou le manifeste changent. */
-const VERSION = "metronome-v1";
+   La page est toujours redemandée au serveur quand il y a du réseau, sans passer
+   par le cache HTTP du navigateur (GitHub Pages le garde 10 min) : une nouvelle
+   version en ligne est prise dès la réouverture. Changer VERSION à chaque
+   mise en ligne de ce fichier, des icônes ou du manifeste. */
+const VERSION = "metronome-v2";
 const FILES = [
   "./",
   "./index.html",
@@ -15,7 +16,10 @@ const FILES = [
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())
+    caches.open(VERSION)
+      /* "reload" : fichiers pris sur le serveur, pas dans le cache du navigateur */
+      .then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -32,10 +36,12 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
 
-  /* la page : réseau d'abord (toujours à jour), cache si hors connexion */
+  /* la page : serveur d'abord (toujours à jour), cache si hors connexion.
+     "no-cache" : le navigateur revérifie auprès du serveur au lieu de
+     resservir sa copie (vérification légère si rien n'a changé). */
   if (req.mode === "navigate") {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: "no-cache" })
         .then((res) => {
           if (res.ok) {
             const copy = res.clone();

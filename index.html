@@ -163,6 +163,7 @@
       width: 100%;
     }
     footer p { margin: 0; }
+    .version { opacity: .5; font-size: .7rem; }
     /* raccourcis clavier inutiles sur écran tactile */
     @media (hover: none) and (pointer: coarse) { .keys { display: none; } }
     kbd {
@@ -235,6 +236,8 @@
       <kbd>Espace</kbd> démarrer / arrêter · <kbd>↑</kbd> <kbd>↓</kbd> ±1 BPM ·
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
+    <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
+    <p class="version">version 2</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
