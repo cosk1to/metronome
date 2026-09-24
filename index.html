@@ -209,7 +209,6 @@
     .calib summary span { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: .4em; }
     .calib-line { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; }
     .calib-line select { flex: 1; }
-    #dial { width: 20px; height: 20px; margin: 12px 0; accent-color: var(--accent); }
     #volumeView { min-width: 3.5em; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
     .calib-body { display: flex; gap: 8px; align-items: center; }
     .calib p { margin: 8px 0 12px; font-size: .8rem; line-height: 1.5; }
@@ -309,10 +308,6 @@
           <input id="volume" type="range" min="0" max="100" step="5" value="80" />
           <span id="volumeView">80 %</span>
         </label>
-        <label class="calib-line">
-          <input type="checkbox" id="dial" checked />
-          Cadran de mesure (où j'en suis dans la mesure)
-        </label>
         <label class="calib-line">Thème
           <select id="theme">
             <option value="auto">automatique (comme l'appareil)</option>
@@ -343,7 +338,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 12</p>
+    <p class="version">version 14</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -382,7 +377,6 @@
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
       theme: "auto", /* "auto" (comme l'appareil), "light" ou "dark" */
       volume: 0.8,    /* 0 à 1 */
-      dial: true,     /* cadran de mesure affiché */
       master: null,   /* nœud de volume général */
       keepAlive: null, /* souffle inaudible qui garde la sortie audio éveillée */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
@@ -410,9 +404,10 @@
       "4/4":  { groups: [1, 1, 1, 1], unit: "beat", note: "", label: "4/4", subs: SUBS_QUARTER },
       "3/4":  { groups: [1, 1, 1], unit: "beat", note: "", label: "3/4", subs: SUBS_QUARTER },
       "2/4":  { groups: [1, 1], unit: "beat", note: "", label: "2/4", subs: SUBS_QUARTER },
-      "5/4":  { groups: [1, 1, 1, 1, 1], unit: "beat", note: "", label: "5/4 (3+2)", subs: SUBS_QUARTER },
-      "5/4b": { groups: [1, 1, 1, 1, 1], unit: "beat", note: "", label: "5/4 (2+3)", subs: SUBS_QUARTER },
-      "6/8":  { groups: [1, 1, 1, 1, 1, 1], unit: "beat", note: "♪", label: "6/8 à 6", subs: SUBS_EIGHTH },
+      /* accents : temps (index) qui ouvrent un groupe, accent secondaire au son seulement */
+      "5/4":  { groups: [1, 1, 1, 1, 1], accents: [3], unit: "beat", note: "", label: "5/4 (3+2)", subs: SUBS_QUARTER },
+      "5/4b": { groups: [1, 1, 1, 1, 1], accents: [2], unit: "beat", note: "", label: "5/4 (2+3)", subs: SUBS_QUARTER },
+      "6/8":  { groups: [1, 1, 1, 1, 1, 1], accents: [3], unit: "beat", note: "♪", label: "6/8 à 6", subs: SUBS_EIGHTH },
       "6/8f": { groups: [3, 3], unit: "beat", note: "♩.", label: "6/8 à 2", subs: SUBS_GROUPED },
       "9/8":  { groups: [3, 3, 3], unit: "beat", note: "♩.", label: "9/8 à 3", subs: SUBS_GROUPED },
       "12/8": { groups: [3, 3, 3, 3], unit: "beat", note: "♩.", label: "12/8 à 4", subs: SUBS_GROUPED },
@@ -426,6 +421,7 @@
       m.starts = m.groups.map((g) => (acc += g) - g);
       m.len = acc;
       m.isStart = Array.from({ length: m.len }, (_, q) => m.starts.includes(q));
+      m.accentQ = (m.accents || []).map((i) => m.starts[i]); /* pulsations à accent secondaire */
     });
     const meter = () => METERS[state.sig];
     const mod = (a, b) => ((a % b) + b) % b;
@@ -468,7 +464,8 @@
     }
 
     /* ---- Son : un clic généré (aucun fichier, marche hors connexion) ----
-       level : 2 = premier temps, 1 = temps, 0 = subdivision. */
+       level : 2 = premier temps, 3 = accent secondaire (début de groupe en 5/4, 6/8 à 6),
+       1 = temps, 0 = subdivision. */
 
     /* enveloppe : attaque très franche (l'instant du temps), puis extinction */
     function env(g, t, peak, dur, attack = 0.002) {
@@ -493,14 +490,15 @@
        filtre plus étroit qui lui donne un léger « tic » : sans cela, un bruit un peu
        plus brillant ne se distingue pas assez à l'oreille. Réglages mesurés par rendu
        hors ligne : le 1 ~6 dB au-dessus des temps, les subdivisions ~7 dB en dessous. */
-    const CLICK = {
-      freq: [1500, 2000, 4200],        /* Hz : subdivision, temps, premier temps */
-      q: [2, 3, 8],
-      dur: [0.015, 0.02, 0.035],       /* s */
-      peak: [1.35, 1.66, 1.66],        /* crête avant écart de niveau (filtre étroit compensé) */
+    const CLICK = {                    /* par niveau : subdivision, temps, 1, accent secondaire */
+      freq: [1500, 2000, 4200, 2900],  /* Hz ; l'accent secondaire est entre le temps et le 1 */
+      q: [2, 3, 8, 5],
+      dur: [0.015, 0.02, 0.035, 0.028], /* s */
+      peak: [1.35, 1.66, 1.66, 1.66],  /* crête avant écart de niveau (filtre étroit compensé) */
     };
-    /* écart de gain entre niveaux : temps −4 dB sous le 1, subdivision −6 dB sous le temps */
-    const LEVEL_GAIN = [0.32, 0.63, 1];
+    /* écart de gain entre niveaux : temps −4 dB sous le 1, subdivision −6 dB sous le temps,
+       accent secondaire à mi-chemin entre le temps et le 1 */
+    const LEVEL_GAIN = [0.32, 0.63, 1, 0.76];
     function playClick(ac, out, t, level) {
       const n = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
       n.buffer = noise(ac);
@@ -572,7 +570,8 @@
         const q = mod(Math.floor(j / k), m.len);      /* pulsation dans la mesure */
         const isBeat = j % k === 0 && m.isStart[q];
         const audible = j >= 0;                       /* décompte muet : le son part au 1 */
-        if (audible && (isBeat || state.sub > 0)) clickAt(t, !isBeat ? 0 : q === 0 ? 2 : 1);
+        const level = !isBeat ? 0 : q === 0 ? 2 : m.accentQ.includes(q) ? 3 : 1;
+        if (audible && (isBeat || state.sub > 0)) clickAt(t, level);
         if (isBeat) state.pending.push({ t });        /* le point marque le temps, décompte compris */
       }
       state.voices = state.voices.filter((v) => v.t > now - 0.5);
@@ -719,8 +718,8 @@
     const SETTINGS_KEY = "metronome-reglages";
     function saveSettings() {
       if (!ready) return; /* pas pendant la restauration au démarrage */
-      const { bpm, mode, sig, sub, sound, prep, theme, volume, dial } = state;
-      const data = { bpm, mode, sig, sub, sound, prep, theme, volume, dial };
+      const { bpm, mode, sig, sub, sound, prep, theme, volume } = state;
+      const data = { bpm, mode, sig, sub, sound, prep, theme, volume };
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (err) {}
     }
     function loadSettings() {
@@ -839,10 +838,6 @@
         state.master.gain.setTargetAtTime(volumeGain(state.volume), state.audio.currentTime, 0.02);
       }
     }
-    $("dial").onchange = (e) => {
-      state.dial = e.target.checked;
-      saveSettings(); /* le redessin suit (événement « change » des commandes) */
-    };
     $("volume").oninput = (e) => setVolume(e.target.value / 100);
     $("volume").onchange = () => { saveSettings(); preview(); }; /* au relâcher */
 
@@ -1133,43 +1128,6 @@
       ctx.restore();
     }
 
-    /* position dans la mesure (0 = le 1, 0.5 = mi-mesure), temps inégaux compris */
-    function barFraction(beats) {
-      const m = meter(), n = m.groups.length;
-      const x = beats - Math.floor(beats / n) * n;   /* temps dans la mesure, continu */
-      const i = Math.min(n - 1, Math.floor(x));
-      return (m.starts[i] + (x - i) * m.groups[i]) / m.len;
-    }
-    /* Cadran de mesure, dans le coin bas-droit : l'aiguille fait un tour par mesure à
-       vitesse constante — jamais de saut, donc aucun rythme ajouté. Graduations fixes
-       au début de chaque temps (le 1 en haut, plus marqué ; espacement inégal en 7/8). */
-    function drawDial(w, h, beats) {
-      const m = meter(), r = 20;
-      ctx.save();
-      ctx.translate(w - 16 - r, h - 16 - r);
-      ctx.strokeStyle = C.track;
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
-      ctx.lineCap = "round";
-      m.starts.forEach((s, i) => {
-        const a = (s / m.len) * Math.PI * 2 - Math.PI / 2;
-        const inner = i === 0 ? r - 8 : r - 5;
-        ctx.strokeStyle = i === 0 ? C.down : C.muted;
-        ctx.lineWidth = i === 0 ? 3 : 2;
-        ctx.beginPath();
-        ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
-        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-        ctx.stroke();
-      });
-      const a = barFraction(beats) * Math.PI * 2 - Math.PI / 2;
-      ctx.strokeStyle = C.muted;
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * (r - 3), Math.sin(a) * (r - 3)); ctx.stroke();
-      ctx.fillStyle = C.muted;
-      ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-    }
-
     function render() {
       const w = stage.clientWidth, h = stage.clientHeight;
       ctx.clearRect(0, 0, w, h);
@@ -1191,7 +1149,6 @@
       }
       if (state.mode === "pendule") drawPendulum(w, h, beats);
       else drawChef(w, h, beats);
-      if (state.dial) drawDial(w, h, beats);
     }
     /* À l'arrêt, l'image ne change pas : on ne redessine qu'après un réglage
        ou pendant la fin d'un flash (économie de batterie). */
@@ -1222,8 +1179,6 @@
     if (["auto", "light", "dark"].includes(saved.theme)) $("theme").value = saved.theme;
     $("theme").onchange({ target: $("theme") });
     setVolume(Number.isFinite(saved.volume) ? saved.volume : $("volume").value / 100);
-    if (typeof saved.dial === "boolean") $("dial").checked = saved.dial;
-    $("dial").onchange({ target: $("dial") });
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
     setOffset(savedOffset);
