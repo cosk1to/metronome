@@ -153,6 +153,23 @@
       background: transparent; border: 0; color: var(--ink);
       font: inherit; font-size: 1.2rem; font-weight: 700;
     }
+    /* calage image/son : replié par défaut pour ne pas encombrer */
+    .calib {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 0 10px;
+      color: var(--muted);
+      font-size: .9rem;
+    }
+    .calib summary {
+      min-height: 44px; display: flex; align-items: center;
+      cursor: pointer; list-style-position: inside;
+    }
+    .calib summary span { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: .4em; }
+    .calib-body { display: flex; gap: 8px; align-items: center; }
+    .calib p { margin: 8px 0 12px; font-size: .8rem; line-height: 1.5; }
+    #offMinus, #offPlus { width: 44px; padding: 0; font-size: 1.2rem; }
     footer {
       padding: 0 22px 16px;
       color: var(--muted);
@@ -175,6 +192,7 @@
        En dernier, pour l'emporter sur les règles générales ci-dessus. */
     @media (max-width: 640px) {
       header { padding: 12px 16px 8px; }
+      .stage { min-height: 300px; } /* tout tient sur un écran de 812 px, calage replié */
       .tempo { display: grid; grid-template-columns: 44px 1fr 44px; }
       .tempo .bpm-num { width: 100%; }
       .tempo #tap { grid-column: 2 / 4; }
@@ -228,6 +246,19 @@
         </select>
         <button id="sound" class="active" aria-pressed="true">🔊 Son</button>
       </div>
+      <details class="calib">
+        <summary>Calage image / son : <span id="offsetView">0 ms</span></summary>
+        <div class="calib-body">
+          <button id="offMinus" aria-label="Image 5 ms plus tôt">−</button>
+          <input id="offset" type="range" min="-150" max="400" step="5" value="0"
+                 aria-label="Calage image / son en millisecondes" />
+          <button id="offPlus" aria-label="Image 5 ms plus tard">+</button>
+          <button id="offReset">0</button>
+        </div>
+        <p>Lance le métronome avec le son. Si le point rebondit <b>avant</b> le clic,
+          appuie sur + ; s'il rebondit <b>après</b>, sur −. Réglage mémorisé sur cet
+          appareil : à refaire si tu changes de casque ou d'enceinte.</p>
+      </details>
     </section>
   </main>
   <footer>
@@ -237,7 +268,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 2</p>
+    <p class="version">version 3</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -267,6 +298,7 @@
       beats: 4,
       sub: 1,
       sound: true,
+      offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
       flash: 0,
       flashAt: -Infinity, /* instant audio du dernier temps affiché */
       taps: [],
@@ -335,10 +367,11 @@
       state.voices.push({ t: time, out: g });
     }
 
-    /* instant audio réellement entendu (latence de sortie comprise, ex. Bluetooth) */
+    /* instant audio réellement entendu : latence annoncée par l'appareil, plus le
+       calage manuel (certains casques Bluetooth annoncent mal leur latence) */
     function heardTime() {
       const ac = state.audio;
-      return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0);
+      return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0) - state.offsetMs / 1000;
     }
     function beatsAt(t) {
       return (t - state.beatZero) / (60 / state.bpm);
@@ -536,6 +569,21 @@
       resched();
     };
     $("sub").onchange = (e) => { state.sub = +e.target.value; resched(); };
+
+    /* calage image/son, mémorisé sur l'appareil (il dépend du casque / de l'enceinte) */
+    const OFFSET_KEY = "metronome-calage-ms";
+    function setOffset(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return;
+      state.offsetMs = Math.max(-150, Math.min(400, Math.round(n / 5) * 5));
+      $("offset").value = state.offsetMs;
+      $("offsetView").textContent = (state.offsetMs > 0 ? "+" : "") + state.offsetMs + " ms";
+      try { localStorage.setItem(OFFSET_KEY, String(state.offsetMs)); } catch (err) {}
+    }
+    $("offset").oninput = (e) => setOffset(e.target.value);
+    $("offMinus").onclick = () => setOffset(state.offsetMs - 5);
+    $("offPlus").onclick = () => setOffset(state.offsetMs + 5);
+    $("offReset").onclick = () => setOffset(0);
 
     function tapTempo() {
       const now = performance.now();
@@ -827,6 +875,9 @@
     $("sig").onchange({ target: $("sig") });
     $("sub").onchange({ target: $("sub") });
     setBpm($("bpm").value);
+    let savedOffset = 0;
+    try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
+    setOffset(savedOffset);
 
     ready = true;
     loop();
