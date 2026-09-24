@@ -14,8 +14,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Métronome" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <script>
+    /* Thème appliqué avant l'affichage (pas de flash sombre avant le clair) :
+       choix mémorisé, ou réglage de l'appareil en automatique. */
+    try {
+      const t = (JSON.parse(localStorage.getItem("metronome-reglages")) || {}).theme || "auto";
+      document.documentElement.dataset.theme = t === "light" || t === "dark" ? t
+        : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    } catch (err) { /* stockage indisponible : thème sombre par défaut */ }
+  </script>
   <style>
+    /* thème sombre (par défaut) */
     :root {
+      color-scheme: dark; /* menus, curseurs et champs natifs assortis */
       --bg: #0b0d10;
       --panel: #151a21;
       --panel-2: #1c232d;
@@ -29,12 +40,40 @@
       --rail: #3a4656;   /* butées, socle, touches clavier */
       --track: #2b3644;  /* arc du pendule */
       --ring: #ffffff;   /* centre du point de la baguette */
+      --glow: #1a2430;   /* halo du fond, en haut */
+      --stage-top: #171e27;
+      --stage-bottom: #10151b;
+      --hover: #3d4b5d;
+      --kbd: #232b35;
       --shadow: 0 18px 50px rgba(0,0,0,.45);
+    }
+    /* thème clair : mêmes rôles, teintes plus soutenues pour rester lisibles sur fond clair */
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #eef1f5;
+      --panel: #ffffff;
+      --panel-2: #f3f5f8;
+      --ink: #18202b;
+      --muted: #5b6776;
+      --line: #d5dbe3;
+      --accent: #b7791f;
+      --beat: #0f9d76;
+      --down: #d9482b;
+      --hand: #b98a4b;
+      --rail: #b8c2cf;
+      --track: #cfd6df;
+      --ring: #ffffff;
+      --glow: #ffffff;
+      --stage-top: #ffffff;
+      --stage-bottom: #f1f4f8;
+      --hover: #aab4c1;
+      --kbd: #eef1f5;
+      --shadow: 0 18px 50px rgba(20,30,45,.12);
     }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; height: 100%;
-      background: radial-gradient(1200px 700px at 50% -10%, #1a2430 0%, var(--bg) 55%);
+      background: radial-gradient(1200px 700px at 50% -10%, var(--glow) 0%, var(--bg) 55%);
       color: var(--ink);
       font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
     }
@@ -63,7 +102,7 @@
       margin: 0 auto;
     }
     .stage {
-      background: linear-gradient(180deg, #171e27, #10151b);
+      background: linear-gradient(180deg, var(--stage-top), var(--stage-bottom));
       border: 1px solid var(--line);
       border-radius: 22px;
       box-shadow: var(--shadow);
@@ -129,10 +168,11 @@
     .settings > * { flex: 1 1 0; min-width: 0; }
     .settings #sound { flex: 0 0 auto; }
     #minus, #plus { width: 44px; padding: 0; font-size: 1.2rem; }
-    button:hover, select:hover { border-color: #3d4b5d; }
+    button:hover, select:hover { border-color: var(--hover); }
     button.primary {
       background: linear-gradient(180deg, #2a8f73, #1d6e58);
       border-color: #3aa888;
+      color: #fff; /* blanc sur vert ou rouge, dans les deux thèmes */
       min-width: 108px;
       font-weight: 650;
     }
@@ -186,7 +226,7 @@
     /* raccourcis clavier inutiles sur écran tactile */
     @media (hover: none) and (pointer: coarse) { .keys { display: none; } }
     kbd {
-      background: #232b35; border: 1px solid var(--rail); border-bottom-width: 2px;
+      background: var(--kbd); border: 1px solid var(--rail); border-bottom-width: 2px;
       border-radius: 6px; padding: 1px 6px; font-size: .75rem;
     }
 
@@ -263,6 +303,13 @@
             <option value="2">2 mesures de décompte</option>
           </select>
         </label>
+        <label class="calib-line">Thème
+          <select id="theme">
+            <option value="auto">automatique (comme l'appareil)</option>
+            <option value="light">clair</option>
+            <option value="dark">sombre</option>
+          </select>
+        </label>
         <div class="calib-line">Calage image / son (Bluetooth)</div>
         <div class="calib-body">
           <button id="offMinus" aria-label="Image 5 ms plus tôt">−</button>
@@ -286,7 +333,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 5</p>
+    <p class="version">version 6</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -294,11 +341,15 @@
     const ctx = canvas.getContext("2d");
     const stage = $("stage");
 
-    /* couleurs du dessin : lues dans les variables CSS (:root), source unique */
-    const css = getComputedStyle(document.documentElement);
+    /* couleurs du dessin : lues dans les variables CSS (:root), source unique ;
+       relues à chaque changement de thème */
     const C = {};
-    ["bg", "ink", "muted", "accent", "beat", "down", "hand", "panel-2", "rail", "track", "ring"]
-      .forEach((k) => { C[k.replace("-", "")] = css.getPropertyValue("--" + k).trim(); });
+    function readColors() {
+      const css = getComputedStyle(document.documentElement);
+      ["bg", "ink", "muted", "accent", "beat", "down", "hand", "panel-2", "rail", "track", "ring"]
+        .forEach((k) => { C[k.replace("-", "")] = css.getPropertyValue("--" + k).trim(); });
+    }
+    readColors();
     function alpha(hex, a) {
       const v = parseInt(hex.slice(1), 16);
       return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${a})`;
@@ -319,6 +370,7 @@
       sub: 0,       /* clics par pulsation ; 0 = temps seuls */
       sound: true,
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
+      theme: "auto", /* "auto" (comme l'appareil), "light" ou "dark" */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
       flash: 0,
       flashAt: -Infinity, /* instant audio du dernier temps affiché */
@@ -574,8 +626,8 @@
     const SETTINGS_KEY = "metronome-reglages";
     function saveSettings() {
       if (!ready) return; /* pas pendant la restauration au démarrage */
-      const { bpm, mode, sig, sub, sound, prep } = state;
-      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ bpm, mode, sig, sub, sound, prep })); } catch (err) {}
+      const { bpm, mode, sig, sub, sound, prep, theme } = state;
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ bpm, mode, sig, sub, sound, prep, theme })); } catch (err) {}
     }
     function loadSettings() {
       try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (err) { return {}; }
@@ -677,6 +729,28 @@
       updateSettingsView();
       saveSettings();
     };
+    /* Thème : automatique (suit l'appareil, y compris s'il change en cours d'usage),
+       clair ou sombre. Le CSS suit data-theme ; le dessin relit ses couleurs. */
+    const systemLight = matchMedia("(prefers-color-scheme: light)");
+    function applyTheme() {
+      const t = state.theme === "auto" ? (systemLight.matches ? "light" : "dark") : state.theme;
+      document.documentElement.dataset.theme = t;
+      readColors();
+      document.querySelector('meta[name="theme-color"]').content = C.bg; /* barre du navigateur */
+      invalidate();
+    }
+    systemLight.addEventListener("change", () => { if (state.theme === "auto") applyTheme(); });
+    /* filet de sécurité : si l'événement n'arrive pas, on revérifie au retour dans l'app
+       (cas typique : on change le thème du téléphone puis on revient) */
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && state.theme === "auto") applyTheme();
+    });
+    $("theme").onchange = (e) => {
+      state.theme = e.target.value;
+      applyTheme();
+      saveSettings();
+    };
+
     /* résumé visible même quand les réglages sont repliés */
     function updateSettingsView() {
       const ms = (state.offsetMs > 0 ? "+" : "") + state.offsetMs + " ms";
@@ -987,6 +1061,8 @@
     if (saved.sound === false) setSound(false);
     if (saved.prep in PREPS) $("prep").value = saved.prep;
     $("prep").onchange({ target: $("prep") });
+    if (["auto", "light", "dark"].includes(saved.theme)) $("theme").value = saved.theme;
+    $("theme").onchange({ target: $("theme") });
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
     setOffset(savedOffset);
