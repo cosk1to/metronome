@@ -113,8 +113,7 @@
       user-select: none;          /* le double-clic ne sélectionne pas le texte */
       -webkit-user-select: none;
     }
-    /* plein écran (double appui) : vrai plein écran, ou zone sur toute la fenêtre (iPhone) */
-    .stage:fullscreen { border: 0; border-radius: 0; }
+    /* plein écran (double appui) : la zone occupe toute la fenêtre */
     body.focus .stage {
       position: fixed; z-index: 10;
       inset: env(safe-area-inset-top) env(safe-area-inset-right)
@@ -349,7 +348,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 17</p>
+    <p class="version">version 18</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -464,6 +463,19 @@
     window.addEventListener("resize", resize); /* aussi pour un changement de zoom / DPR */
     resize();
 
+    /* À l'arrêt, le flux audio vers le haut-parleur est fermé (suspendu) après un
+       court délai (fin des derniers clics) : batterie, et aucune interaction avec le
+       système audio quand l'app ne joue rien. ensureAudio le rouvre au démarrage. */
+    let suspendTimer = null;
+    function suspendSoon() {
+      clearTimeout(suspendTimer);
+      suspendTimer = setTimeout(() => {
+        if (!state.running && state.audio && state.audio.state === "running") {
+          state.audio.suspend().catch(() => {});
+        }
+      }, 1500);
+    }
+
     function ensureAudio() {
       if (!state.audio) {
         /* iPhone : mode « lecture » pour que le bouton silencieux ne coupe pas
@@ -481,7 +493,8 @@
           try { state.audio = new AC(); } catch (err2) { return null; } /* anciens Safari */
         }
       }
-      /* "suspended", ou "interrupted" sur Safari */
+      /* "suspended" (arrêt, voir suspendSoon), ou "interrupted" sur Safari */
+      clearTimeout(suspendTimer);
       if (state.audio.state !== "running") {
         const p = state.audio.resume();
         if (p && p.catch) p.catch(() => {});
@@ -731,6 +744,7 @@
       cancelFuture();
       state.running = false;
       keepAlive(false);
+      suspendSoon();
       ticker.stop();
       keepAwake(false);
       invalidate();
@@ -817,28 +831,26 @@
       pendule: "Suis la boule : le temps tombe quand elle touche une butée. Double appui : plein écran.",
     };
 
-    /* Plein écran de la zone du métronome par double appui (doigt ou souris) ;
-       double appui à nouveau pour sortir (ou retour / Échap). API plein écran si
-       possible (Android, PC) ; sinon (iPhone : réservée aux vidéos) la zone occupe
-       toute la fenêtre. */
-    /* zone sur toute la fenêtre (secours) ; le canvas est redimensionné aussitôt */
+    /* Plein écran de la zone du métronome par double appui (doigt ou souris) : la
+       zone occupe toute la fenêtre. Volontairement pas le plein écran du système :
+       sur Android, sa notification de sortie provoquait un son parasite quand on
+       gardait le doigt dessus. Sortie : double appui, bouton retour ou Échap. */
+    const isFocus = () => document.body.classList.contains("focus");
     function setFocus(on) {
       document.body.classList.toggle("focus", on);
-      resize();
+      resize(); /* canvas redimensionné aussitôt */
     }
     function toggleFullscreen() {
-      if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
-      if (document.body.classList.contains("focus")) { setFocus(false); return; }
-      const fallback = () => setFocus(true);
-      if (!stage.requestFullscreen) { fallback(); return; }
-      stage.requestFullscreen({ navigationUI: "hide" }).catch(fallback);
-      /* certains navigateurs acceptent la demande sans l'appliquer : on vérifie */
-      setTimeout(() => { if (!document.fullscreenElement) fallback(); }, 400);
+      if (isFocus()) {
+        history.back(); /* consomme l'étape ajoutée à l'entrée ; la sortie suit (popstate) */
+      } else {
+        history.pushState({ focus: true }, ""); /* le bouton retour ramène à l'écran normal */
+        setFocus(true);
+      }
     }
-    /* sortie du vrai plein écran (retour, Échap, double appui) : on nettoie aussi le secours */
-    document.addEventListener("fullscreenchange", () => {
-      if (!document.fullscreenElement) document.body.classList.remove("focus");
-      resize();
+    window.addEventListener("popstate", () => { if (isFocus()) setFocus(false); });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && isFocus()) history.back();
     });
     let lastTap = { t: 0, x: 0, y: 0 };
     stage.addEventListener("pointerup", (e) => {
@@ -898,6 +910,7 @@
       if (!ac) return;
       const t = ac.currentTime + 0.05;
       [2, 1, 1].forEach((level, i) => clickAt(t + i * 0.4, level));
+      suspendSoon(); /* ~1 s d'aperçu, puis le flux se referme */
     }
     function setVolume(v) {
       state.volume = Math.max(0, Math.min(1, v));
