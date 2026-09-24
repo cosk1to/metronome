@@ -209,6 +209,7 @@
     .calib summary span { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: .4em; }
     .calib-line { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; }
     .calib-line select { flex: 1; }
+    #volumeView { min-width: 3.5em; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
     .calib-body { display: flex; gap: 8px; align-items: center; }
     .calib p { margin: 8px 0 12px; font-size: .8rem; line-height: 1.5; }
     #offMinus, #offPlus { width: 44px; padding: 0; font-size: 1.2rem; }
@@ -303,6 +304,17 @@
             <option value="2">2 mesures de décompte</option>
           </select>
         </label>
+        <label class="calib-line">Son
+          <select id="timbre">
+            <option value="wood">bois</option>
+            <option value="click">clic</option>
+            <option value="beep">bip</option>
+          </select>
+        </label>
+        <label class="calib-line">Volume
+          <input id="volume" type="range" min="0" max="100" step="5" value="80" />
+          <span id="volumeView">80 %</span>
+        </label>
         <label class="calib-line">Thème
           <select id="theme">
             <option value="auto">automatique (comme l'appareil)</option>
@@ -333,7 +345,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 6</p>
+    <p class="version">version 7</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -371,6 +383,9 @@
       sound: true,
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
       theme: "auto", /* "auto" (comme l'appareil), "light" ou "dark" */
+      timbre: "wood", /* son : "wood" (bois), "click" ou "beep" */
+      volume: 0.8,    /* 0 à 1 */
+      master: null,   /* nœud de volume général */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
       flash: 0,
       flashAt: -Infinity, /* instant audio du dernier temps affiché */
@@ -453,22 +468,97 @@
       return state.audio;
     }
 
-    /* level : 2 = premier temps, 1 = temps, 0 = subdivision */
+    /* ---- Sons, tous générés (aucun fichier, marche hors connexion) ----
+       level : 2 = premier temps, 1 = temps, 0 = subdivision. */
+
+    /* enveloppe : attaque très franche (l'instant du temps), puis extinction */
+    function env(g, t, peak, dur, attack = 0.002) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    }
+    /* bruit blanc, créé une fois par contexte audio */
+    const noiseCache = new WeakMap();
+    function noise(ac) {
+      if (!noiseCache.has(ac)) {
+        const buf = ac.createBuffer(1, Math.ceil(ac.sampleRate * 0.05), ac.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        noiseCache.set(ac, buf);
+      }
+      return noiseCache.get(ac);
+    }
+
+    /* Bois : sinus dont la hauteur chute vite + souffle aigu à l'attaque (le « toc »).
+       Percussif, peu de sensation de note, peu fatigant. */
+    function playWood(ac, out, t, level) {
+      const f0 = [700, 900, 1250][level];
+      const dur = [0.035, 0.06, 0.07][level];
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(f0, t);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + 0.04);
+      env(g, t, PEAK.wood, dur, 0.001);
+      o.connect(g).connect(out);
+      o.start(t); o.stop(t + dur + 0.02);
+      const n = ac.createBufferSource(), hp = ac.createBiquadFilter(), ng = ac.createGain();
+      n.buffer = noise(ac);
+      hp.type = "highpass"; hp.frequency.value = 2500;
+      env(ng, t, PEAK.wood * 0.5, 0.008, 0.0005);
+      n.connect(hp).connect(ng).connect(out);
+      n.start(t); n.stop(t + 0.02);
+    }
+    /* Clic : bruit filtré très court, sans hauteur ; net, perce bien dans un ensemble */
+    function playClick(ac, out, t, level) {
+      const n = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+      n.buffer = noise(ac);
+      bp.type = "bandpass"; bp.frequency.value = [1800, 2600, 3600][level]; bp.Q.value = 1.5;
+      env(g, t, PEAK.click, [0.015, 0.02, 0.025][level], 0.0005);
+      n.connect(bp).connect(g).connect(out);
+      n.start(t); n.stop(t + 0.04);
+    }
+    /* Bip : onde carrée à hauteur fixe (le son d'origine) */
+    function playBeep(ac, out, t, level) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      const dur = [0.03, 0.045, 0.07][level];
+      o.type = "square";
+      o.frequency.setValueAtTime([660, 880, 1320][level], t);
+      env(g, t, PEAK.beep, dur);
+      o.connect(g).connect(out);
+      o.start(t); o.stop(t + dur + 0.02);
+    }
+    const SOUNDS = { wood: playWood, click: playClick, beep: playBeep };
+    /* Crête de chaque son, réglée par mesure du volume efficace (rendu hors ligne) pour
+       que les trois paraissent aussi forts. Référence : le bip. Le clic est laissé ~2 dB
+       en dessous, l'oreille étant plus sensible vers 2–4 kHz où il se situe. */
+    const PEAK = { wood: 0.19, click: 1.04, beep: 0.18 };
+    /* écart de gain entre niveaux : temps −4 dB sous le 1, subdivision −6 dB sous le temps.
+       Avec les durées et hauteurs propres à chaque niveau, cela donne (mesuré) un 1
+       ~5 dB au-dessus des temps, et des subdivisions ~8 dB en dessous. */
+    const LEVEL_GAIN = [0.32, 0.63, 1];
+
+    /* Volume général : un seul nœud en sortie, donc le curseur agit aussi sur les
+       clics déjà programmés. 80 % = niveau de référence ; courbe au carré, plus
+       naturelle à l'oreille qu'une courbe linéaire. */
+    function volumeGain(v) { return (v / 0.8) ** 2; }
+    function masterOut() {
+      const ac = state.audio;
+      if (!state.master || state.master.context !== ac) {
+        state.master = ac.createGain();
+        state.master.gain.value = volumeGain(state.volume);
+        state.master.connect(ac.destination);
+      }
+      return state.master;
+    }
+
     function clickAt(time, level) {
       if (!state.sound) return;
       const ac = state.audio;
-      const o = ac.createOscillator();
-      const g = ac.createGain();
-      const dur = [0.03, 0.045, 0.07][level];
-      o.type = "square";
-      o.frequency.setValueAtTime([660, 880, 1320][level], time);
-      g.gain.setValueAtTime(0.0001, time);
-      g.gain.exponentialRampToValueAtTime([0.04, 0.09, 0.18][level], time + 0.002);
-      g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-      o.connect(g).connect(ac.destination);
-      o.start(time);
-      o.stop(time + dur + 0.02);
-      state.voices.push({ t: time, out: g });
+      const out = ac.createGain(); /* une sortie par clic : on peut l'annuler (cancelFuture) */
+      out.gain.value = LEVEL_GAIN[level];
+      out.connect(masterOut());
+      SOUNDS[state.timbre](ac, out, time, level);
+      state.voices.push({ t: time, out });
     }
 
     /* instant audio réellement entendu : latence annoncée par l'appareil, plus le
@@ -626,8 +716,9 @@
     const SETTINGS_KEY = "metronome-reglages";
     function saveSettings() {
       if (!ready) return; /* pas pendant la restauration au démarrage */
-      const { bpm, mode, sig, sub, sound, prep, theme } = state;
-      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ bpm, mode, sig, sub, sound, prep, theme })); } catch (err) {}
+      const { bpm, mode, sig, sub, sound, prep, theme, timbre, volume } = state;
+      const data = { bpm, mode, sig, sub, sound, prep, theme, timbre, volume };
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (err) {}
     }
     function loadSettings() {
       try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (err) { return {}; }
@@ -729,6 +820,31 @@
       updateSettingsView();
       saveSettings();
     };
+    /* Aperçu du son (à l'arrêt) : le 1 puis deux temps, pour entendre l'écart d'accent */
+    function preview() {
+      if (state.running || !state.sound) return;
+      const ac = ensureAudio();
+      if (!ac) return;
+      const t = ac.currentTime + 0.05;
+      [2, 1, 1].forEach((level, i) => clickAt(t + i * 0.4, level));
+    }
+    $("timbre").onchange = (e) => {
+      state.timbre = e.target.value;
+      resched(); /* les clics déjà programmés prennent le nouveau son */
+      saveSettings();
+      if (ready) preview();
+    };
+    function setVolume(v) {
+      state.volume = Math.max(0, Math.min(1, v));
+      $("volume").value = Math.round(state.volume * 100);
+      $("volumeView").textContent = Math.round(state.volume * 100) + " %";
+      if (state.master) {
+        state.master.gain.setTargetAtTime(volumeGain(state.volume), state.audio.currentTime, 0.02);
+      }
+    }
+    $("volume").oninput = (e) => setVolume(e.target.value / 100);
+    $("volume").onchange = () => { saveSettings(); preview(); }; /* au relâcher */
+
     /* Thème : automatique (suit l'appareil, y compris s'il change en cours d'usage),
        clair ou sombre. Le CSS suit data-theme ; le dessin relit ses couleurs. */
     const systemLight = matchMedia("(prefers-color-scheme: light)");
@@ -1063,6 +1179,9 @@
     $("prep").onchange({ target: $("prep") });
     if (["auto", "light", "dark"].includes(saved.theme)) $("theme").value = saved.theme;
     $("theme").onchange({ target: $("theme") });
+    if (saved.timbre in SOUNDS) $("timbre").value = saved.timbre;
+    $("timbre").onchange({ target: $("timbre") });
+    setVolume(Number.isFinite(saved.volume) ? saved.volume : $("volume").value / 100);
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
     setOffset(savedOffset);
