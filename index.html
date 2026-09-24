@@ -348,7 +348,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 20</p>
+    <p class="version">version 21</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -1235,6 +1235,19 @@
       }
       ctx.save();
       ctx.translate(cx, cy);
+      const pos = conductorPos(pts, beats);
+      const x = pos.x * sx, y = pos.y * s;
+
+      /* Ordre de dessin = profondeur, vue du musicien face au chef : le bras s'éloigne
+         vers le corps du chef, donc au fond ; la figure est tracée dans l'air par la
+         pointe, plus près de nous ; le point (la pointe) est devant tout. */
+      ctx.strokeStyle = C.hand;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.55, s * 0.95);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
       ctx.strokeStyle = alpha(C.accent, .28);
       ctx.lineWidth = 3;
       ctx.stroke(patternPath(pts, sx, s));
@@ -1251,18 +1264,9 @@
         ctx.fillText(String(i + 1), px, py + 32);
       });
 
-      const pos = conductorPos(pts, beats);
-      const x = pos.x * sx, y = pos.y * s;
       bobMark(x, y, 11 + state.flash * 10);
       ctx.fillStyle = C.ring;
       ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2); ctx.fill();
-
-      ctx.strokeStyle = C.hand;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(-s * 0.55, s * 0.95);
-      ctx.lineTo(x, y);
-      ctx.stroke();
       ctx.restore();
     }
 
