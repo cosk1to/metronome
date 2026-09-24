@@ -348,7 +348,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 19</p>
+    <p class="version">version 20</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -382,6 +382,7 @@
     const START_DELAY = 0.05; /* s : marge pour que le premier clic ne soit pas tronqué */
     /* 20 : adagios très lents ; 300 : mesures irrégulières comptées à la croche */
     const BPM_MIN = 20, BPM_MAX = 300;
+    const FOCUS_TOP = 76; /* px : en pleine fenêtre, le dessin commence sous l'affichage BPM */
 
     const state = {
       running: false,
@@ -1122,7 +1123,13 @@
         len = Math.max(60, Math.min(len, (cyMin - 110) / Math.cos(maxAng)));
       }
       const k = Math.min(len / 220, K_MAX); /* le socle suit la taille du pendule */
-      const cy = baseBottom - 18 * k;
+      let cy = baseBottom - 18 * k;
+      if (isFocus()) {
+        /* pleine fenêtre : le pendule (du haut de la boule au bas du socle) est centré
+           verticalement dans la place libre, sous l'affichage BPM */
+        const free = baseBottom - FOCUS_TOP - (len + 28 + 18 * k);
+        if (free > 0) cy -= free / 2;
+      }
       const ang = pendulumAngle(beats, maxAng);
 
       ctx.save();
@@ -1192,11 +1199,40 @@
       return pathCache.path;
     }
 
+    /* cadre du schéma (en unités), mesuré une fois par schéma */
+    const boxCache = new WeakMap();
+    function patternBox(pts) {
+      if (!boxCache.has(pts)) {
+        const b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+        for (let i = 0; i <= pts.length * 40; i++) {
+          const p = conductorPos(pts, i / 40);
+          b.x0 = Math.min(b.x0, p.x); b.x1 = Math.max(b.x1, p.x);
+          b.y0 = Math.min(b.y0, p.y); b.y1 = Math.max(b.y1, p.y);
+        }
+        boxCache.set(pts, b);
+      }
+      return boxCache.get(pts);
+    }
+
     function drawChef(w, h, beats) {
-      const cx = w/2, cy = h/2 + 8;
-      const s = Math.min(w, h) * 0.36;
-      const sx = Math.min(w * 0.42, s * 1.6); /* plus large que haut : on profite de l'écran */
       const pts = patternFor(state.sig);
+      let cx = w / 2, cy = h / 2 + 8;
+      let s = Math.min(w, h) * 0.36;
+      let sx = Math.min(w * 0.42, s * 1.6); /* plus large que haut : on profite de l'écran */
+      if (isFocus()) {
+        /* pleine fenêtre : l'ensemble schéma + bras remplit la place libre (sous
+           l'affichage BPM, au-dessus de l'étiquette) et y est centré. Le bras part de
+           (−0.55, 0.95) : c'est le point le plus bas, sous les numéros d'ictus. */
+        const b = patternBox(pts);
+        const X0 = Math.min(b.x0, -0.55), X1 = b.x1, Y0 = b.y0, Y1 = Math.max(b.y1, 0.95);
+        const pad = 24;                        /* place du point et de son grossissement */
+        const top = FOCUS_TOP + pad, bottom = h - 44 - pad;
+        const availW = w - 2 * (16 + pad), availH = bottom - top;
+        s = Math.min(availH / (Y1 - Y0), availW / (X1 - X0));
+        sx = Math.min(availW / (X1 - X0), s * 1.6);
+        cx = w / 2 - ((X0 + X1) / 2) * sx;
+        cy = (top + bottom) / 2 - ((Y0 + Y1) / 2) * s;
+      }
       ctx.save();
       ctx.translate(cx, cy);
       ctx.strokeStyle = alpha(C.accent, .28);
