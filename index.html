@@ -209,6 +209,7 @@
     .calib summary span { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: .4em; }
     .calib-line { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; }
     .calib-line select { flex: 1; }
+    #dial { width: 20px; height: 20px; margin: 12px 0; accent-color: var(--accent); }
     #volumeView { min-width: 3.5em; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
     .calib-body { display: flex; gap: 8px; align-items: center; }
     .calib p { margin: 8px 0 12px; font-size: .8rem; line-height: 1.5; }
@@ -308,6 +309,10 @@
           <input id="volume" type="range" min="0" max="100" step="5" value="80" />
           <span id="volumeView">80 %</span>
         </label>
+        <label class="calib-line">
+          <input type="checkbox" id="dial" checked />
+          Cadran de mesure (où j'en suis dans la mesure)
+        </label>
         <label class="calib-line">Thème
           <select id="theme">
             <option value="auto">automatique (comme l'appareil)</option>
@@ -338,7 +343,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 10</p>
+    <p class="version">version 11</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -377,6 +382,7 @@
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
       theme: "auto", /* "auto" (comme l'appareil), "light" ou "dark" */
       volume: 0.8,    /* 0 à 1 */
+      dial: true,     /* cadran de mesure affiché */
       master: null,   /* nœud de volume général */
       keepAlive: null, /* souffle inaudible qui garde la sortie audio éveillée */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
@@ -712,8 +718,8 @@
     const SETTINGS_KEY = "metronome-reglages";
     function saveSettings() {
       if (!ready) return; /* pas pendant la restauration au démarrage */
-      const { bpm, mode, sig, sub, sound, prep, theme, volume } = state;
-      const data = { bpm, mode, sig, sub, sound, prep, theme, volume };
+      const { bpm, mode, sig, sub, sound, prep, theme, volume, dial } = state;
+      const data = { bpm, mode, sig, sub, sound, prep, theme, volume, dial };
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (err) {}
     }
     function loadSettings() {
@@ -832,6 +838,10 @@
         state.master.gain.setTargetAtTime(volumeGain(state.volume), state.audio.currentTime, 0.02);
       }
     }
+    $("dial").onchange = (e) => {
+      state.dial = e.target.checked;
+      saveSettings(); /* le redessin suit (événement « change » des commandes) */
+    };
     $("volume").oninput = (e) => setVolume(e.target.value / 100);
     $("volume").onchange = () => { saveSettings(); preview(); }; /* au relâcher */
 
@@ -1122,6 +1132,43 @@
       ctx.restore();
     }
 
+    /* position dans la mesure (0 = le 1, 0.5 = mi-mesure), temps inégaux compris */
+    function barFraction(beats) {
+      const m = meter(), n = m.groups.length;
+      const x = beats - Math.floor(beats / n) * n;   /* temps dans la mesure, continu */
+      const i = Math.min(n - 1, Math.floor(x));
+      return (m.starts[i] + (x - i) * m.groups[i]) / m.len;
+    }
+    /* Cadran de mesure, dans le coin bas-droit : l'aiguille fait un tour par mesure à
+       vitesse constante — jamais de saut, donc aucun rythme ajouté. Graduations fixes
+       au début de chaque temps (le 1 en haut, plus marqué ; espacement inégal en 7/8). */
+    function drawDial(w, h, beats) {
+      const m = meter(), r = 20;
+      ctx.save();
+      ctx.translate(w - 16 - r, h - 16 - r);
+      ctx.strokeStyle = C.track;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineCap = "round";
+      m.starts.forEach((s, i) => {
+        const a = (s / m.len) * Math.PI * 2 - Math.PI / 2;
+        const inner = i === 0 ? r - 8 : r - 5;
+        ctx.strokeStyle = i === 0 ? C.down : C.muted;
+        ctx.lineWidth = i === 0 ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        ctx.stroke();
+      });
+      const a = barFraction(beats) * Math.PI * 2 - Math.PI / 2;
+      ctx.strokeStyle = C.muted;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * (r - 3), Math.sin(a) * (r - 3)); ctx.stroke();
+      ctx.fillStyle = C.muted;
+      ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
     function render() {
       const w = stage.clientWidth, h = stage.clientHeight;
       ctx.clearRect(0, 0, w, h);
@@ -1143,6 +1190,7 @@
       }
       if (state.mode === "pendule") drawPendulum(w, h, beats);
       else drawChef(w, h, beats);
+      if (state.dial) drawDial(w, h, beats);
     }
     /* À l'arrêt, l'image ne change pas : on ne redessine qu'après un réglage
        ou pendant la fin d'un flash (économie de batterie). */
@@ -1173,6 +1221,8 @@
     if (["auto", "light", "dark"].includes(saved.theme)) $("theme").value = saved.theme;
     $("theme").onchange({ target: $("theme") });
     setVolume(Number.isFinite(saved.volume) ? saved.volume : $("volume").value / 100);
+    if (typeof saved.dial === "boolean") $("dial").checked = saved.dial;
+    $("dial").onchange({ target: $("dial") });
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
     setOffset(savedOffset);
