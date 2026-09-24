@@ -230,7 +230,7 @@
     </section>
   </main>
   <footer>
-    <p>Suis le point : le temps tombe quand il rebondit. Le chef est vu de face.</p>
+    <p id="hint">Suis le bout de la baguette : le temps tombe quand il rebondit. Le chef est vu de face.</p>
     <p class="keys">
       <kbd>Espace</kbd> démarrer / arrêter · <kbd>↑</kbd> <kbd>↓</kbd> ±1 BPM ·
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
@@ -515,7 +515,15 @@
       }
     }
 
-    $("mode").onchange = (e) => { state.mode = e.target.value; };
+    /* consigne de lecture propre à chaque mode */
+    const HINTS = {
+      chef: "Suis le bout de la baguette : le temps tombe quand il rebondit. Le chef est vu de face.",
+      pendule: "Suis la boule : le temps tombe quand elle touche une butée.",
+    };
+    $("mode").onchange = (e) => {
+      state.mode = e.target.value;
+      $("hint").textContent = HINTS[state.mode];
+    };
     $("sig").onchange = (e) => {
       state.sig = e.target.value;
       state.beats = beatsFor(state.sig);
@@ -810,6 +818,13 @@
       }
       requestAnimationFrame(loop);
     }
+    /* au rechargement, le navigateur peut restaurer les menus et le curseur :
+       on part de ce qu'ils affichent pour rester cohérent (mode, texte, mesure…) */
+    $("mode").onchange({ target: $("mode") });
+    $("sig").onchange({ target: $("sig") });
+    $("sub").onchange({ target: $("sub") });
+    setBpm($("bpm").value);
+
     ready = true;
     loop();
 
