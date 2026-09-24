@@ -300,9 +300,9 @@
         <summary>Réglages : <span id="settingsView">levée · calage 0 ms</span></summary>
         <label class="calib-line">Départ
           <select id="prep">
-            <option value="levee">levée muette (1 temps)</option>
-            <option value="1">1 mesure de décompte</option>
-            <option value="2">2 mesures de décompte</option>
+            <option value="levee">levée (1 temps)</option>
+            <option value="1">1 mesure de décompte muet</option>
+            <option value="2">2 mesures de décompte muet</option>
           </select>
         </label>
         <label class="calib-line">Volume
@@ -343,7 +343,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 11</p>
+    <p class="version">version 12</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -391,7 +391,7 @@
       taps: [],
       audio: null,
       beatZero: 0,  /* instant audio du 1er temps */
-      audibleFrom: 0, /* 1re pulsation qui sonne (négative = décompte audible) */
+      visibleFrom: 0, /* 1re pulsation marquée par le point (négative = décompte) ; le son part toujours au 1 */
       schedSub: null,
       voices: [],   /* clics programmés : { t, out } */
       pending: [],  /* temps à afficher quand ils sont entendus : { t } */
@@ -567,13 +567,13 @@
       if (state.schedSub == null || state.schedSub < due) state.schedSub = due;
       while (state.beatZero + (state.schedSub + 1) * gridDur < now + LOOKAHEAD) {
         const j = ++state.schedSub;
-        if (j < state.audibleFrom * k) continue;      /* levée muette */
+        if (j < state.visibleFrom * k) continue;      /* levée : aucun temps marqué */
         const t = state.beatZero + j * gridDur;
         const q = mod(Math.floor(j / k), m.len);      /* pulsation dans la mesure */
         const isBeat = j % k === 0 && m.isStart[q];
-        if (!isBeat && state.sub === 0) continue;     /* temps seuls */
-        clickAt(t, !isBeat ? 0 : q === 0 ? 2 : 1);
-        if (isBeat) state.pending.push({ t });
+        const audible = j >= 0;                       /* décompte muet : le son part au 1 */
+        if (audible && (isBeat || state.sub > 0)) clickAt(t, !isBeat ? 0 : q === 0 ? 2 : 1);
+        if (isBeat) state.pending.push({ t });        /* le point marque le temps, décompte compris */
       }
       state.voices = state.voices.filter((v) => v.t > now - 0.5);
     }
@@ -642,9 +642,9 @@
 
     /* Réveil de la sortie audio : beaucoup de casques et enceintes Bluetooth (et
        certains pilotes) se mettent en veille dans le silence et avalent les premiers
-       sons au réveil — le début du décompte disparaissait. Au démarrage, le premier
-       clic attend WARMUP ; pendant la lecture, un souffle inaudible (−72 dB) empêche
-       la sortie de se rendormir, même aux tempos lents. */
+       sons au réveil. Au démarrage, la préparation attend WARMUP ; pendant la lecture,
+       un souffle inaudible (−72 dB) empêche la sortie de se rendormir, même pendant
+       un décompte muet ou aux tempos lents. */
     const WARMUP = 0.3;
     function keepAlive(on) {
       if (on && !state.keepAlive) {
@@ -666,15 +666,16 @@
       return state.prep === "levee" ? 1 : Number(state.prep) * meter().groups.length;
     }
 
-    /* (re)part du début de la mesure, précédé de la préparation :
-       - levée : 1 temps muet, le dernier de la mesure (le plus long en 7/8 2+2+3) ;
-       - décompte : 1 ou 2 mesures entières, audibles, accent sur le 1.
+    /* (re)part du début de la mesure, précédé de la préparation, toujours muette :
+       - levée : 1 temps, le dernier de la mesure (le plus long en 7/8 2+2+3), geste seul ;
+       - décompte : 1 ou 2 mesures entières où le point bat chaque temps ; le son
+         démarre sur le 1 du vrai départ, qui se distingue ainsi nettement du décompte.
        lead : délai avant la préparation (WARMUP au démarrage, sortie encore en veille). */
     function beginBar(lead = START_DELAY) {
       const m = meter();
       const levee = state.prep === "levee";
       const prep = levee ? m.groups[m.groups.length - 1] : m.len * Number(state.prep);
-      state.audibleFrom = levee ? 0 : -prep;
+      state.visibleFrom = levee ? 0 : -prep;
       state.beatZero = state.audio.currentTime + lead + prep * pulseDur();
       state.schedSub = null;
       state.pending = [];
@@ -815,7 +816,7 @@
       try { localStorage.setItem(OFFSET_KEY, String(state.offsetMs)); } catch (err) {}
     }
 
-    /* départ : levée muette ou mesures de décompte */
+    /* départ : levée ou mesures de décompte, toujours muettes */
     const PREPS = { levee: "levée", 1: "décompte 1 mesure", 2: "décompte 2 mesures" };
     $("prep").onchange = (e) => {
       state.prep = e.target.value;
