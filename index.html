@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Métronome visuel</title>
+  <meta name="description" content="Métronome visuel : pendule ou chef d’orchestre, pour suivre le temps des yeux." />
+  <!-- application installable (PWA) -->
+  <meta name="theme-color" content="#0b0d10" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Métronome" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --panel: #151a21;
+      --panel-2: #1c232d;
+      --ink: #e8edf4;
+      --muted: #8b97a8;
+      --line: #2a3442;
+      --accent: #e8b86d;
+      --beat: #3ee0b0;
+      --down: #ff6b4a;
+      --hand: #f4d9a6;
+      --rail: #3a4656;   /* butées, socle, touches clavier */
+      --track: #2b3644;  /* arc du pendule */
+      --ring: #ffffff;   /* centre du point de la baguette */
+      --shadow: 0 18px 50px rgba(0,0,0,.45);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: radial-gradient(1200px 700px at 50% -10%, #1a2430 0%, var(--bg) 55%);
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    }
+    body {
+      display: flex; flex-direction: column;
+      min-height: 100dvh;
+      /* app installée en plein écran : rien sous l'encoche ni la barre d'accueil */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+               env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    header {
+      padding: 14px 22px 10px;
+      max-width: 920px; width: 100%; margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.05rem; font-weight: 650; letter-spacing: .02em; margin: 0;
+    }
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 14px;
+      padding: 0 16px 18px;
+      max-width: 920px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .stage {
+      background: linear-gradient(180deg, #171e27, #10151b);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      position: relative; /* canvas, HUD et étiquette y sont positionnés en absolu */
+      min-height: 360px;
+      overflow: hidden;
+    }
+    /* hors du flux : la taille de la scène ne dépend pas du canvas */
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .hud {
+      position: absolute; inset: 14px 16px auto 16px;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      pointer-events: none;
+    }
+    .bpm-big {
+      font-variant-numeric: tabular-nums;
+      font-size: clamp(2.2rem, 6vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+    .bpm-big small { font-size: .38em; color: var(--muted); font-weight: 500; letter-spacing: .08em; }
+    .sig {
+      text-align: right;
+      color: var(--muted);
+      font-size: .9rem;
+    }
+    .sig b { color: var(--ink); font-size: 1.15rem; }
+    .beat-label {
+      position: absolute; bottom: 16px; left: 0; right: 0;
+      text-align: center;
+      font-size: 1.05rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .controls {
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: flex; gap: 8px; align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 10px;
+    }
+    button, select {
+      appearance: none;
+      min-height: 44px; /* taille tactile minimale */
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--ink);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font: inherit;
+      cursor: pointer;
+      touch-action: manipulation; /* pas de zoom au double-tap (Tap tempo) */
+      -webkit-tap-highlight-color: transparent;
+    }
+    select { min-width: 0; text-overflow: ellipsis; }
+    .settings > * { flex: 1 1 0; min-width: 0; }
+    .settings #sound { flex: 0 0 auto; }
+    #minus, #plus { width: 44px; padding: 0; font-size: 1.2rem; }
+    button:hover, select:hover { border-color: #3d4b5d; }
+    button.primary {
+      background: linear-gradient(180deg, #2a8f73, #1d6e58);
+      border-color: #3aa888;
+      min-width: 108px;
+      font-weight: 650;
+    }
+    button.primary.stop {
+      background: linear-gradient(180deg, #b44a38, #8d3224);
+      border-color: #d36a56;
+    }
+    button.active {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    input[type="range"] {
+      flex: 1; min-width: 0;
+      accent-color: var(--accent);
+    }
+    .bpm-num {
+      width: 64px; text-align: center;
+      background: transparent; border: 0; color: var(--ink);
+      font: inherit; font-size: 1.2rem; font-weight: 700;
+    }
+    footer {
+      padding: 0 22px 16px;
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.6;
+      max-width: 920px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    footer p { margin: 0; }
+    /* raccourcis clavier inutiles sur écran tactile */
+    @media (hover: none) and (pointer: coarse) { .keys { display: none; } }
+    kbd {
+      background: #232b35; border: 1px solid var(--rail); border-bottom-width: 2px;
+      border-radius: 6px; padding: 1px 6px; font-size: .75rem;
+    }
+
+    /* smartphone : Démarrer en grand, le reste rangé deux par deux.
+       En dernier, pour l'emporter sur les règles générales ci-dessus. */
+    @media (max-width: 640px) {
+      header { padding: 12px 16px 8px; }
+      .tempo { display: grid; grid-template-columns: 44px 1fr 44px; }
+      .tempo .bpm-num { width: 100%; }
+      .tempo #tap { grid-column: 2 / 4; }
+      .settings { display: grid; grid-template-columns: 1fr 1fr; }
+      .settings #start { grid-column: 1 / -1; min-height: 54px; font-size: 1.1rem; }
+      footer { padding: 0 16px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Métronome visuel</h1>
+  </header>
+  <main>
+    <section class="stage" id="stage">
+      <canvas id="c"></canvas>
+      <div class="hud">
+        <div class="bpm-big"><span id="bpmView">92</span> <small>BPM</small></div>
+        <div class="sig"><b id="sigView">4/4</b></div>
+      </div>
+      <div class="beat-label" id="beatView">prêt</div>
+    </section>
+    <section class="controls">
+      <div class="row tempo">
+        <button id="minus" aria-label="Ralentir de 1 BPM">−</button>
+        <input id="bpm" type="range" min="40" max="220" value="92" aria-label="Tempo" />
+        <button id="plus" aria-label="Accélérer de 1 BPM">+</button>
+        <input id="bpmNum" class="bpm-num" type="number" inputmode="numeric" min="40" max="220" value="92" aria-label="Tempo en BPM" />
+        <button id="tap">Tap tempo</button>
+      </div>
+      <div class="row settings">
+        <button class="primary" id="start">Démarrer</button>
+        <select id="mode" aria-label="Affichage">
+          <option value="chef">Chef d’orchestre</option>
+          <option value="pendule">Pendule</option>
+        </select>
+        <select id="sig" aria-label="Mesure">
+          <option value="4/4">4/4</option>
+          <option value="3/4">3/4</option>
+          <option value="2/4">2/4</option>
+          <option value="5/4">5/4 (3+2)</option>
+          <option value="5/4b">5/4 (2+3)</option>
+          <option value="6/8">6/8 battu à 6</option>
+          <option value="6/8f">6/8 battu à 2</option>
+        </select>
+        <select id="sub" aria-label="Subdivision">
+          <option value="1">Temps seuls</option>
+          <option value="2">+ croches</option>
+          <option value="3">+ triolets</option>
+          <option value="4">+ doubles croches</option>
+        </select>
+        <button id="sound" class="active" aria-pressed="true">🔊 Son</button>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <p>Suis le point : le temps tombe quand il rebondit. Le chef est vu de face.</p>
+    <p class="keys">
+      <kbd>Espace</kbd> démarrer / arrêter · <kbd>↑</kbd> <kbd>↓</kbd> ±1 BPM ·
+      <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
+    </p>
+  </footer>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const canvas = $("c");
+    const ctx = canvas.getContext("2d");
+    const stage = $("stage");
+
+    /* couleurs du dessin : lues dans les variables CSS (:root), source unique */
+    const css = getComputedStyle(document.documentElement);
+    const C = {};
+    ["bg", "ink", "muted", "accent", "beat", "down", "hand", "panel-2", "rail", "track", "ring"]
+      .forEach((k) => { C[k.replace("-", "")] = css.getPropertyValue("--" + k).trim(); });
+    function alpha(hex, a) {
+      const v = parseInt(hex.slice(1), 16);
+      return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${a})`;
+    }
+
+    const LOOKAHEAD = 0.12;   /* s : horizon de programmation des clics */
+    const TICK_MS = 25;       /* période du planificateur */
+    const START_DELAY = 0.05; /* s : marge pour que le premier clic ne soit pas tronqué */
+
+    const state = {
+      running: false,
+      bpm: 92,
+      mode: "chef",
+      sig: "4/4",
+      beats: 4,
+      sub: 1,
+      sound: true,
+      flash: 0,
+      flashAt: -Infinity, /* instant audio du dernier temps affiché */
+      taps: [],
+      audio: null,
+      beatZero: 0,
+      schedSub: null,
+      voices: [],   /* clics programmés : { t, out } */
+      pending: [],  /* temps à afficher quand ils sont entendus : { t } */
+    };
+
+    function beatsFor(sig) {
+      if (sig === "3/4") return 3;
+      if (sig === "2/4" || sig === "6/8f") return 2;
+      if (sig === "5/4" || sig === "5/4b") return 5;
+      if (sig === "6/8") return 6;
+      return 4;
+    }
+
+    /* mêmes dimensions que celles utilisées pour dessiner (clientWidth/Height) */
+    function resize() {
+      const w = stage.clientWidth, h = stage.clientHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      /* changer la taille efface le canvas : on redessine tout de suite */
+      if (ready) render();
+    }
+    let ready = false;
+    if ("ResizeObserver" in window) new ResizeObserver(resize).observe(stage);
+    window.addEventListener("resize", resize); /* aussi pour un changement de zoom / DPR */
+    resize();
+
+    function ensureAudio() {
+      if (!state.audio) {
+        /* iPhone : mode « lecture » pour que le bouton silencieux ne coupe pas
+           le métronome (API Safari récente, ignorée ailleurs) */
+        try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (err) {}
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        try { state.audio = new AC(); } catch (err) { return null; }
+      }
+      /* "suspended", ou "interrupted" sur Safari */
+      if (state.audio.state !== "running") {
+        const p = state.audio.resume();
+        if (p && p.catch) p.catch(() => {});
+      }
+      return state.audio;
+    }
+
+    /* level : 2 = premier temps, 1 = temps, 0 = subdivision */
+    function clickAt(time, level) {
+      if (!state.sound) return;
+      const ac = state.audio;
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      const dur = [0.03, 0.045, 0.07][level];
+      o.type = "square";
+      o.frequency.setValueAtTime([660, 880, 1320][level], time);
+      g.gain.setValueAtTime(0.0001, time);
+      g.gain.exponentialRampToValueAtTime([0.04, 0.09, 0.18][level], time + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+      o.connect(g).connect(ac.destination);
+      o.start(time);
+      o.stop(time + dur + 0.02);
+      state.voices.push({ t: time, out: g });
+    }
+
+    /* instant audio réellement entendu (latence de sortie comprise, ex. Bluetooth) */
+    function heardTime() {
+      const ac = state.audio;
+      return ac.currentTime - (ac.outputLatency || 0) - (ac.baseLatency || 0);
+    }
+    function beatsAt(t) {
+      return (t - state.beatZero) / (60 / state.bpm);
+    }
+
+    /* Planificateur « deux horloges » : un minuteur régulier programme chaque clic
+       à son heure exacte sur l'horloge audio, LOOKAHEAD secondes à l'avance. */
+    function schedule() {
+      if (!state.running || !state.audio) return;
+      const now = state.audio.currentTime;
+      const subDur = 60 / state.bpm / state.sub;
+      /* dernier index déjà passé : après un retard (onglet caché…), on reprend
+         ici au lieu de rejouer d'un coup tout ce qui a été manqué */
+      const due = Math.floor((now - state.beatZero) / subDur);
+      if (state.schedSub == null || state.schedSub < due) state.schedSub = due;
+      while (state.beatZero + (state.schedSub + 1) * subDur < now + LOOKAHEAD) {
+        state.schedSub++;
+        if (state.schedSub < 0) continue; /* temps de préparation : muet */
+        const t = state.beatZero + state.schedSub * subDur;
+        const isBeat = state.schedSub % state.sub === 0;
+        const beatNum = Math.floor(state.schedSub / state.sub);
+        const inBar = ((beatNum % state.beats) + state.beats) % state.beats;
+        clickAt(t, !isBeat ? 0 : inBar === 0 ? 2 : 1);
+        if (isBeat) state.pending.push({ t });
+      }
+      state.voices = state.voices.filter((v) => v.t > now - 0.5);
+    }
+
+    /* Minuteur dans un Worker : moins bridé que setInterval quand l'onglet est caché.
+       Il ne tourne que pendant la lecture (économie de batterie). */
+    const ticker = (() => {
+      let worker = null, id = null;
+      try {
+        const src = "let id = null; onmessage = (e) => { clearInterval(id);" +
+          " id = e.data ? setInterval(() => postMessage(0), e.data) : null; };";
+        worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+        worker.onmessage = () => schedule();
+        /* Worker refusé (ex. fichier ouvert en local) : repli sur setInterval */
+        worker.onerror = () => { worker = null; if (state.running) ticker.start(); };
+      } catch (err) {
+        worker = null;
+      }
+      return {
+        start() {
+          if (worker) worker.postMessage(TICK_MS);
+          else if (id == null) id = setInterval(schedule, TICK_MS);
+        },
+        stop() {
+          if (worker) worker.postMessage(0);
+          clearInterval(id);
+          id = null;
+        },
+      };
+    })();
+
+    /* annule les clics programmés pas encore joués */
+    function cancelFuture() {
+      if (!state.audio) return;
+      const now = state.audio.currentTime;
+      state.voices = state.voices.filter((v) => {
+        if (v.t <= now) return true;
+        v.out.disconnect();
+        return false;
+      });
+      state.pending = state.pending.filter((p) => p.t <= now);
+      state.schedSub = null;
+    }
+
+    /* Garde l'écran allumé pendant la lecture (sinon le téléphone se met en veille).
+       Le navigateur libère le verrou quand l'onglet est caché : on le reprend au retour. */
+    let wakeLock = null;
+    async function keepAwake(on) {
+      try {
+        if (on && !wakeLock && "wakeLock" in navigator) {
+          const lock = await navigator.wakeLock.request("screen");
+          /* arrêté entre-temps, ou une autre demande a déjà abouti */
+          if (!state.running || wakeLock) { lock.release(); return; }
+          wakeLock = lock;
+          lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; });
+        } else if (!on && wakeLock) {
+          const lock = wakeLock;
+          wakeLock = null;
+          await lock.release();
+        }
+      } catch (err) { /* refusé (économie d'énergie…) : le métronome marche quand même */ }
+    }
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && state.running) keepAwake(true);
+    });
+
+    function start() {
+      const ac = ensureAudio();
+      if (!ac) { $("beatView").textContent = "audio indisponible"; return; }
+      state.running = true;
+      /* un temps de préparation avant le 1, comme la levée du chef */
+      state.beatZero = ac.currentTime + START_DELAY + 60 / state.bpm;
+      state.schedSub = null;
+      state.pending = [];
+      $("start").textContent = "Arrêter";
+      $("start").classList.add("stop");
+      $("beatView").textContent = "préparation";
+      schedule();
+      ticker.start();
+      keepAwake(true);
+    }
+    function stop() {
+      cancelFuture();
+      state.running = false;
+      ticker.stop();
+      keepAwake(false);
+      invalidate();
+      state.pending = [];
+      $("start").textContent = "Démarrer";
+      $("start").classList.remove("stop");
+      $("beatView").textContent = "prêt";
+    }
+    function toggle() { state.running ? stop() : start(); }
+
+    /* reprogramme les clics à venir après un changement de réglage */
+    function resched() {
+      if (!state.running) return;
+      cancelFuture();
+      schedule();
+    }
+
+    $("start").onclick = toggle;
+    $("sound").onclick = () => {
+      state.sound = !state.sound;
+      $("sound").textContent = state.sound ? "🔊 Son" : "🔇 Muet";
+      $("sound").setAttribute("aria-pressed", state.sound);
+      $("sound").classList.toggle("active", state.sound);
+      resched();
+    };
+
+    function setBpm(v) {
+      const n = Number(v);
+      /* champ vide ou invalide : on garde le tempo actuel */
+      if (v === "" || !Number.isFinite(n)) { $("bpmNum").value = state.bpm; return; }
+      const next = Math.max(40, Math.min(220, Math.round(n)));
+      const changed = next !== state.bpm;
+      if (state.running && state.audio && changed) {
+        /* garde la position dans la mesure ; seuls les clics pas encore joués sont reprogrammés */
+        const now = state.audio.currentTime;
+        const beats = (now - state.beatZero) * state.bpm / 60;
+        state.beatZero = now - beats * 60 / next;
+      }
+      state.bpm = next;
+      if (changed) { resched(); invalidate(); } /* la masse du pendule bouge avec le tempo */
+      $("bpm").value = state.bpm;
+      $("bpmNum").value = state.bpm;
+      $("bpmView").textContent = state.bpm;
+    }
+    $("bpm").oninput = (e) => setBpm(e.target.value);
+    $("bpmNum").onchange = (e) => setBpm(e.target.value);
+    $("minus").onclick = () => setBpm(state.bpm - 1);
+    $("plus").onclick = () => setBpm(state.bpm + 1);
+
+    /* Subdivisions qui ont un sens musical dans chaque mesure (valeur = clics par temps).
+       6/8 battu à 6 : le temps est une croche → 2 par temps = doubles croches.
+       6/8 battu à 2 : le temps est une noire pointée → 3 par temps = croches. */
+    const SUB_CHOICES = {
+      default: { 1: "Temps seuls", 2: "+ croches", 3: "+ triolets", 4: "+ doubles croches" },
+      "6/8": { 1: "Temps seuls", 2: "+ doubles croches" },
+      "6/8f": { 1: "Temps seuls", 3: "+ croches" },
+    };
+    function updateSubOptions() {
+      const choices = SUB_CHOICES[state.sig] || SUB_CHOICES.default;
+      for (const opt of $("sub").options) {
+        const label = choices[opt.value];
+        opt.hidden = opt.disabled = !label;
+        if (label) opt.textContent = label;
+      }
+      if (!choices[state.sub]) {
+        /* choix impossible dans cette mesure : on prend la subdivision disponible */
+        state.sub = state.sub > 1 ? +Object.keys(choices).pop() : 1;
+        $("sub").value = state.sub;
+      }
+    }
+
+    $("mode").onchange = (e) => { state.mode = e.target.value; };
+    $("sig").onchange = (e) => {
+      state.sig = e.target.value;
+      state.beats = beatsFor(state.sig);
+      const labels = { "6/8": "6/8 à 6", "6/8f": "6/8 à 2", "5/4": "5/4 (3+2)", "5/4b": "5/4 (2+3)" };
+      $("sigView").textContent = labels[state.sig] || state.sig;
+      updateSubOptions();
+      resched();
+    };
+    $("sub").onchange = (e) => { state.sub = +e.target.value; resched(); };
+
+    function tapTempo() {
+      const now = performance.now();
+      state.taps = state.taps.filter((t) => now - t < 2500);
+      state.taps.push(now);
+      if (state.taps.length >= 2) {
+        const diffs = [];
+        for (let i = 1; i < state.taps.length; i++) diffs.push(state.taps[i] - state.taps[i - 1]);
+        const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+        setBpm(60000 / avg);
+      }
+    }
+    $("tap").onclick = tapTempo;
+
+    /* champs qui gèrent eux-mêmes le clavier (le curseur range est traité à part) */
+    function isField(el) {
+      const tag = el && el.tagName;
+      return tag === "SELECT" || tag === "TEXTAREA" || (tag === "INPUT" && el.type !== "range");
+    }
+    const ARROWS = { ArrowUp: 1, ArrowDown: -1, ArrowRight: 5, ArrowLeft: -5 };
+
+    window.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || isField(e.target)) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (!e.repeat) toggle();
+      } else if (e.key in ARROWS) {
+        if (e.target.type === "range") return; /* le curseur bouge déjà tout seul */
+        e.preventDefault();
+        setBpm(state.bpm + ARROWS[e.key]);
+      } else if ((e.key || "").toLowerCase() === "t" && !e.repeat) {
+        tapTempo();
+      }
+    });
+    /* un bouton qui a le focus ne doit pas aussi s'activer au relâchement d'Espace */
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space" && e.target.tagName === "BUTTON") e.preventDefault();
+    });
+
+    /* Vue musicien : tu es face au chef (sa gauche = ta droite).
+       x positif = ta droite à l’écran, y positif = vers le bas.
+       Chaque temps = son ictus {x, y} + la hauteur h du rebond qui mène au temps suivant.
+       Tous les ictus tombent sur le même « plan » (y ≈ 0.5) ; seul le rebond du
+       dernier temps monte haut : c'est la préparation du temps 1. */
+    const PATTERNS = {
+      2: [
+        { x: 0, y: .62, h: .55 }, { x: -.28, y: .48, h: 1.2 },
+      ],
+      3: [
+        { x: 0, y: .62, h: .45 }, { x: -.62, y: .5, h: .5 }, { x: -.18, y: .42, h: 1.15 },
+      ],
+      4: [
+        { x: 0, y: .62, h: .45 }, { x: .5, y: .5, h: .38 },
+        { x: -.66, y: .5, h: .5 }, { x: -.2, y: .42, h: 1.15 },
+      ],
+      /* 3+2 : 1 · 2-3 vers la gauche du chef · 4 traverse à droite · 5 */
+      "5/4": [
+        { x: 0, y: .62, h: .42 }, { x: .32, y: .54, h: .3 }, { x: .64, y: .5, h: .45 },
+        { x: -.62, y: .5, h: .5 }, { x: -.2, y: .42, h: 1.15 },
+      ],
+      /* 2+3 : 1 · 2 à gauche du chef · 3-4 traversent à droite · 5 */
+      "5/4b": [
+        { x: 0, y: .62, h: .42 }, { x: .5, y: .5, h: .45 }, { x: -.38, y: .54, h: .3 },
+        { x: -.68, y: .5, h: .5 }, { x: -.2, y: .42, h: 1.15 },
+      ],
+      /* 6 temps : 2-3 de plus en plus à gauche du chef, 4-5 de plus en plus à droite */
+      "6/8": [
+        { x: 0, y: .62, h: .3 }, { x: .3, y: .56, h: .28 }, { x: .6, y: .5, h: .42 },
+        { x: -.38, y: .56, h: .28 }, { x: -.68, y: .5, h: .42 }, { x: -.2, y: .42, h: 1.1 },
+      ],
+    };
+    function patternFor(sig) {
+      return PATTERNS[sig] || PATTERNS[beatsFor(sig)];
+    }
+
+    /* Trajet balistique entre deux ictus, comme une balle qui rebondit :
+       vitesse maximale au contact (l'ictus), nulle au sommet du rebond.
+       beats est le compteur de temps continu (1.5 = à mi-chemin entre les temps 2 et 3). */
+    function conductorPos(pat, beats) {
+      const n = pat.length;
+      const f = Math.floor(beats);
+      const t = beats - f;
+      const a = pat[((f % n) + n) % n];
+      const b = pat[(((f + 1) % n) + n) % n];
+      return {
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t - a.h * 4 * t * (1 - t),
+      };
+    }
+
+    /* Pendule inversé (tige vers le haut) qui rebondit sur ses butées :
+       vitesse maximale au contact (le temps), minimale au sommet.
+       Temps pairs à gauche, impairs à droite. Compteur continu : en 3/4 ou 5/4,
+       le temps 1 alterne de côté au lieu de sauter. */
+    const BOUNCE = 0.7; /* 0 = vitesse constante ; vers 1 = rebond plus marqué */
+    function sideOf(beat) {
+      return ((Math.floor(beat) % 2) + 2) % 2 === 0 ? -1 : 1;
+    }
+    /* avancement 0 → 1 d'une butée à l'autre, rapide aux extrémités */
+    function bounceEase(u) {
+      return u + BOUNCE * Math.sin(2 * Math.PI * u) / (2 * Math.PI);
+    }
+    function pendulumAngle(beats, maxAng) {
+      const u = beats - Math.floor(beats);
+      return sideOf(beats) * maxAng * (1 - 2 * bounceEase(u));
+    }
+
+    /* Principe d'affichage : seul le point mobile change avec le temps (il grossit
+       brièvement à chaque temps, identique pour tous). Tout le reste est fixe :
+       aucun autre élément ne doit introduire un rythme (subdivision, mesure…). */
+
+    /* Repère fixe d'ictus. Le 1 est un losange : la forme le distingue,
+       pas seulement la couleur (rouge/vert se confondent pour les daltoniens). */
+    function markPath(x, y, r, diamond) {
+      ctx.beginPath();
+      if (diamond) {
+        const d = r * 1.35;
+        ctx.moveTo(x, y - d); ctx.lineTo(x + d, y); ctx.lineTo(x, y + d); ctx.lineTo(x - d, y);
+        ctx.closePath();
+      } else {
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+      }
+    }
+    /* Point mobile (boule du pendule, bout de baguette) : même aspect à chaque temps */
+    function bobMark(x, y, r) {
+      ctx.fillStyle = C.beat;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    function drawPendulum(w, h, beats) {
+      const maxAng = 0.55;
+      /* Mise en page depuis le bas de la scène, pour ne jamais chevaucher :
+         étiquette HTML (44 px) · socle · pivot */
+      const K_MAX = 1.3;               /* taille maximale du socle */
+      const baseBottom = h - 56;       /* bas du socle, au-dessus de l'étiquette */
+      const cx = w / 2;
+      /* longueur calculée avec le socle le plus grand possible : toujours de la place */
+      const cyMin = baseBottom - 18 * K_MAX;
+      /* aussi grand que possible : sommet sous le haut de la scène, butées dans la largeur */
+      let len = Math.max(60, Math.min(cyMin - 44, (w / 2 - 16) / Math.sin(maxAng + 0.15) - 18));
+      /* écran étroit : les butées arriveraient sous l'affichage BPM / mesure → on reste en dessous */
+      if (w / 2 - Math.sin(maxAng + 0.15) * (len + 18) < 140) {
+        len = Math.max(60, Math.min(len, (cyMin - 110) / Math.cos(maxAng)));
+      }
+      const k = Math.min(len / 220, K_MAX); /* le socle suit la taille du pendule */
+      const cy = baseBottom - 18 * k;
+      const ang = pendulumAngle(beats, maxAng);
+
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      /* socle façon métronome mécanique */
+      ctx.fillStyle = C.panel2;
+      ctx.strokeStyle = C.rail;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-54 * k, 18 * k); ctx.lineTo(-22 * k, -8 * k);
+      ctx.lineTo(22 * k, -8 * k); ctx.lineTo(54 * k, 18 * k);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+
+      ctx.strokeStyle = C.track;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, len, -Math.PI / 2 - maxAng, -Math.PI / 2 + maxAng);
+      ctx.stroke();
+
+      /* butées fixes, juste derrière la boule : elles bornent le mouvement
+         et ne s'allument jamais */
+      ctx.lineCap = "round";
+      ctx.strokeStyle = C.rail;
+      ctx.lineWidth = 5;
+      [-1, 1].forEach((side) => {
+        const a = side * (maxAng + 30 / len);
+        ctx.beginPath();
+        ctx.moveTo(Math.sin(a) * (len - 18), -Math.cos(a) * (len - 18));
+        ctx.lineTo(Math.sin(a) * (len + 18), -Math.cos(a) * (len + 18));
+        ctx.stroke();
+      });
+
+      ctx.fillStyle = C.accent;
+      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
+
+      ctx.rotate(ang);
+      ctx.strokeStyle = C.accent;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -len); ctx.stroke();
+
+      /* masse coulissante, comme sur un métronome mécanique : plus haut = plus lent */
+      const wy = -len * (0.3 + 0.45 * (220 - state.bpm) / 180);
+      ctx.fillStyle = C.muted;
+      ctx.beginPath();
+      ctx.moveTo(-10 * k, wy - 9 * k); ctx.lineTo(10 * k, wy - 9 * k);
+      ctx.lineTo(14 * k, wy + 9 * k); ctx.lineTo(-14 * k, wy + 9 * k);
+      ctx.closePath(); ctx.fill();
+      bobMark(0, -len, 20 + state.flash * 8);
+      ctx.fillStyle = C.bg;
+      ctx.beginPath(); ctx.arc(0, -len, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    /* tracé du schéma, recalculé seulement quand la mesure ou la taille change */
+    let pathCache = { pts: null, sx: 0, s: 0, path: null };
+    function patternPath(pts, sx, s) {
+      if (pathCache.pts !== pts || pathCache.sx !== sx || pathCache.s !== s) {
+        const path = new Path2D();
+        const PER_BEAT = 40;
+        for (let i = 0; i <= pts.length * PER_BEAT; i++) {
+          const p = conductorPos(pts, i / PER_BEAT);
+          if (i === 0) path.moveTo(p.x * sx, p.y * s); else path.lineTo(p.x * sx, p.y * s);
+        }
+        pathCache = { pts, sx, s, path };
+      }
+      return pathCache.path;
+    }
+
+    function drawChef(w, h, beats) {
+      const cx = w/2, cy = h/2 + 8;
+      const s = Math.min(w, h) * 0.36;
+      const sx = Math.min(w * 0.42, s * 1.6); /* plus large que haut : on profite de l'écran */
+      const pts = patternFor(state.sig);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.strokeStyle = alpha(C.accent, .28);
+      ctx.lineWidth = 3;
+      ctx.stroke(patternPath(pts, sx, s));
+
+      /* ictus fixes, numérotés (numéros dessous : le geste passe au-dessus) */
+      ctx.font = "700 14px IBM Plex Sans, sans-serif";
+      ctx.textAlign = "center";
+      pts.forEach((p, i) => {
+        const px = p.x * sx, py = p.y * s;
+        markPath(px, py, i === 0 ? 8 : 6, i === 0);
+        ctx.fillStyle = i === 0 ? C.down : C.muted;
+        ctx.fill();
+        ctx.fillStyle = C.ink;
+        ctx.fillText(String(i + 1), px, py + 32);
+      });
+
+      const pos = conductorPos(pts, beats);
+      const x = pos.x * sx, y = pos.y * s;
+      bobMark(x, y, 11 + state.flash * 10);
+      ctx.fillStyle = C.ring;
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2); ctx.fill();
+
+      ctx.strokeStyle = C.hand;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.55, s * 0.95);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function render() {
+      const w = stage.clientWidth, h = stage.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+      let beats = -1; /* à l'arrêt : position de départ de la préparation (dernier temps) */
+      if (state.audio) {
+        const heard = heardTime();
+        /* chaque temps s'affiche quand il est entendu, pas quand il est programmé */
+        while (state.pending.length && state.pending[0].t <= heard) {
+          state.flashAt = state.pending.shift().t;
+          /* dès le premier temps, l'étiquette s'efface : pas de texte qui change à chaque temps */
+          if ($("beatView").textContent) $("beatView").textContent = "";
+        }
+        /* décroissance en fonction du temps, identique à 60 Hz ou 120 Hz */
+        state.flash = Math.exp(-Math.max(0, heard - state.flashAt) / 0.11);
+        if (state.running) beats = beatsAt(heard);
+      }
+      if (state.mode === "pendule") drawPendulum(w, h, beats);
+      else drawChef(w, h, beats);
+    }
+    /* À l'arrêt, l'image ne change pas : on ne redessine qu'après un réglage
+       ou pendant la fin d'un flash (économie de batterie). */
+    let dirty = true;
+    function invalidate() { dirty = true; }
+    document.querySelector(".controls").addEventListener("input", invalidate);
+    document.querySelector(".controls").addEventListener("change", invalidate);
+    function loop() {
+      if (state.running || dirty || state.flash > 0.005) {
+        dirty = false;
+        render();
+      }
+      requestAnimationFrame(loop);
+    }
+    ready = true;
+    loop();
+
+    /* app installable et utilisable hors connexion (seulement quand la page est
+       servie en http(s) ; ouverte comme simple fichier, on s'en passe) */
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
