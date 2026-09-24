@@ -109,6 +109,17 @@
       position: relative; /* canvas, HUD et étiquette y sont positionnés en absolu */
       min-height: 360px;
       overflow: hidden;
+      touch-action: manipulation; /* double appui = plein écran, pas zoom */
+      user-select: none;          /* le double-clic ne sélectionne pas le texte */
+      -webkit-user-select: none;
+    }
+    /* plein écran (double appui) : vrai plein écran, ou zone sur toute la fenêtre (iPhone) */
+    .stage:fullscreen { border: 0; border-radius: 0; }
+    body.focus .stage {
+      position: fixed; z-index: 10;
+      inset: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+      border: 0; border-radius: 0;
     }
     /* hors du flux : la taille de la scène ne dépend pas du canvas */
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -332,13 +343,13 @@
     </section>
   </main>
   <footer>
-    <p id="hint">Suis le bout de la baguette : le temps tombe quand il rebondit. Le chef est vu de face.</p>
+    <p id="hint">Suis le bout de la baguette (chef vu de face) : le temps tombe au rebond. Double appui : plein écran.</p>
     <p class="keys">
       <kbd>Espace</kbd> démarrer / arrêter · <kbd>↑</kbd> <kbd>↓</kbd> ±1 BPM ·
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 15</p>
+    <p class="version">version 16</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -794,9 +805,44 @@
 
     /* consigne de lecture propre à chaque mode */
     const HINTS = {
-      chef: "Suis le bout de la baguette : le temps tombe quand il rebondit. Le chef est vu de face.",
-      pendule: "Suis la boule : le temps tombe quand elle touche une butée.",
+      chef: "Suis le bout de la baguette (chef vu de face) : le temps tombe au rebond. Double appui : plein écran.",
+      pendule: "Suis la boule : le temps tombe quand elle touche une butée. Double appui : plein écran.",
     };
+
+    /* Plein écran de la zone du métronome par double appui (doigt ou souris) ;
+       double appui à nouveau pour sortir (ou retour / Échap). API plein écran si
+       possible (Android, PC) ; sinon (iPhone : réservée aux vidéos) la zone occupe
+       toute la fenêtre. */
+    /* zone sur toute la fenêtre (secours) ; le canvas est redimensionné aussitôt */
+    function setFocus(on) {
+      document.body.classList.toggle("focus", on);
+      resize();
+    }
+    function toggleFullscreen() {
+      if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+      if (document.body.classList.contains("focus")) { setFocus(false); return; }
+      const fallback = () => setFocus(true);
+      if (!stage.requestFullscreen) { fallback(); return; }
+      stage.requestFullscreen({ navigationUI: "hide" }).catch(fallback);
+      /* certains navigateurs acceptent la demande sans l'appliquer : on vérifie */
+      setTimeout(() => { if (!document.fullscreenElement) fallback(); }, 400);
+    }
+    /* sortie du vrai plein écran (retour, Échap, double appui) : on nettoie aussi le secours */
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement) document.body.classList.remove("focus");
+      resize();
+    });
+    let lastTap = { t: 0, x: 0, y: 0 };
+    stage.addEventListener("pointerup", (e) => {
+      const now = performance.now();
+      const near = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40;
+      if (now - lastTap.t < 350 && near) {
+        lastTap.t = 0;
+        toggleFullscreen();
+      } else {
+        lastTap = { t: now, x: e.clientX, y: e.clientY };
+      }
+    });
     $("mode").onchange = (e) => {
       state.mode = e.target.value;
       $("hint").textContent = HINTS[state.mode];
