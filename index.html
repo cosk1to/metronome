@@ -304,13 +304,6 @@
             <option value="2">2 mesures de décompte</option>
           </select>
         </label>
-        <label class="calib-line">Son
-          <select id="timbre">
-            <option value="wood">bois</option>
-            <option value="click">clic</option>
-            <option value="beep">bip</option>
-          </select>
-        </label>
         <label class="calib-line">Volume
           <input id="volume" type="range" min="0" max="100" step="5" value="80" />
           <span id="volumeView">80 %</span>
@@ -345,7 +338,7 @@
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 8</p>
+    <p class="version">version 10</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -383,9 +376,9 @@
       sound: true,
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
       theme: "auto", /* "auto" (comme l'appareil), "light" ou "dark" */
-      timbre: "wood", /* son : "wood" (bois), "click" ou "beep" */
       volume: 0.8,    /* 0 à 1 */
       master: null,   /* nœud de volume général */
+      keepAlive: null, /* souffle inaudible qui garde la sortie audio éveillée */
       offsetMs: 0,  /* calage manuel image/son, positif = image retardée */
       flash: 0,
       flashAt: -Infinity, /* instant audio du dernier temps affiché */
@@ -468,7 +461,7 @@
       return state.audio;
     }
 
-    /* ---- Sons, tous générés (aucun fichier, marche hors connexion) ----
+    /* ---- Son : un clic généré (aucun fichier, marche hors connexion) ----
        level : 2 = premier temps, 1 = temps, 0 = subdivision. */
 
     /* enveloppe : attaque très franche (l'instant du temps), puis extinction */
@@ -489,62 +482,27 @@
       return noiseCache.get(ac);
     }
 
-    /* Bois : sinus dont la hauteur chute vite + souffle aigu à l'attaque (le « toc »).
-       Percussif, peu de sensation de note, peu fatigant. */
-    function playWood(ac, out, t, level) {
-      const f0 = [700, 900, 1250][level];
-      const dur = [0.035, 0.06, 0.07][level];
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = "sine";
-      o.frequency.setValueAtTime(f0, t);
-      o.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + 0.04);
-      env(g, t, PEAK.wood, dur, 0.001);
-      o.connect(g).connect(out);
-      o.start(t); o.stop(t + dur + 0.02);
-      const n = ac.createBufferSource(), hp = ac.createBiquadFilter(), ng = ac.createGain();
-      n.buffer = noise(ac);
-      hp.type = "highpass"; hp.frequency.value = 2500;
-      env(ng, t, PEAK.wood * 0.5, 0.008, 0.0005);
-      n.connect(hp).connect(ng).connect(out);
-      n.start(t); n.stop(t + 0.02);
-    }
-    /* Clic : bruit filtré très court ; net, perce bien dans un ensemble.
+    /* Clic : bruit filtré très court, sans note ; net, perce bien dans un ensemble.
        Le 1 est plus d'une octave au-dessus des temps (4200 contre 2000 Hz), avec un
-       filtre étroit qui lui donne un léger « tic » à hauteur perceptible : sans cela,
-       un bruit un peu plus brillant ne se distingue pas assez à l'oreille. */
+       filtre plus étroit qui lui donne un léger « tic » : sans cela, un bruit un peu
+       plus brillant ne se distingue pas assez à l'oreille. Réglages mesurés par rendu
+       hors ligne : le 1 ~6 dB au-dessus des temps, les subdivisions ~7 dB en dessous. */
     const CLICK = {
-      freq: [1500, 2000, 4200],
+      freq: [1500, 2000, 4200],        /* Hz : subdivision, temps, premier temps */
       q: [2, 3, 8],
-      dur: [0.015, 0.02, 0.035],
-      trim: [1.3, 1.6, 1.6], /* un filtre étroit laisse passer moins d'énergie : compensé (mesuré) */
+      dur: [0.015, 0.02, 0.035],       /* s */
+      peak: [1.35, 1.66, 1.66],        /* crête avant écart de niveau (filtre étroit compensé) */
     };
+    /* écart de gain entre niveaux : temps −4 dB sous le 1, subdivision −6 dB sous le temps */
+    const LEVEL_GAIN = [0.32, 0.63, 1];
     function playClick(ac, out, t, level) {
       const n = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
       n.buffer = noise(ac);
       bp.type = "bandpass"; bp.frequency.value = CLICK.freq[level]; bp.Q.value = CLICK.q[level];
-      env(g, t, PEAK.click * CLICK.trim[level], CLICK.dur[level], 0.0005);
+      env(g, t, CLICK.peak[level], CLICK.dur[level], 0.0005);
       n.connect(bp).connect(g).connect(out);
       n.start(t); n.stop(t + 0.04);
     }
-    /* Bip : onde carrée à hauteur fixe (le son d'origine) */
-    function playBeep(ac, out, t, level) {
-      const o = ac.createOscillator(), g = ac.createGain();
-      const dur = [0.03, 0.045, 0.07][level];
-      o.type = "square";
-      o.frequency.setValueAtTime([660, 880, 1320][level], t);
-      env(g, t, PEAK.beep, dur);
-      o.connect(g).connect(out);
-      o.start(t); o.stop(t + dur + 0.02);
-    }
-    const SOUNDS = { wood: playWood, click: playClick, beep: playBeep };
-    /* Crête de chaque son, réglée par mesure du volume efficace (rendu hors ligne) pour
-       que les trois paraissent aussi forts. Référence : le bip. Le clic est laissé ~2 dB
-       en dessous, l'oreille étant plus sensible vers 2–4 kHz où il se situe. */
-    const PEAK = { wood: 0.19, click: 1.04, beep: 0.18 };
-    /* écart de gain entre niveaux : temps −4 dB sous le 1, subdivision −6 dB sous le temps.
-       Avec les durées et hauteurs propres à chaque niveau, cela donne (mesuré) un 1
-       ~5 dB au-dessus des temps, et des subdivisions ~8 dB en dessous. */
-    const LEVEL_GAIN = [0.32, 0.63, 1];
 
     /* Volume général : un seul nœud en sortie, donc le curseur agit aussi sur les
        clics déjà programmés. 80 % = niveau de référence ; courbe au carré, plus
@@ -566,7 +524,7 @@
       const out = ac.createGain(); /* une sortie par clic : on peut l'annuler (cancelFuture) */
       out.gain.value = LEVEL_GAIN[level];
       out.connect(masterOut());
-      SOUNDS[state.timbre](ac, out, time, level);
+      playClick(ac, out, time, level);
       state.voices.push({ t: time, out });
     }
 
@@ -676,15 +634,42 @@
       if (document.visibilityState === "visible" && state.running) keepAwake(true);
     });
 
+    /* Réveil de la sortie audio : beaucoup de casques et enceintes Bluetooth (et
+       certains pilotes) se mettent en veille dans le silence et avalent les premiers
+       sons au réveil — le début du décompte disparaissait. Au démarrage, le premier
+       clic attend WARMUP ; pendant la lecture, un souffle inaudible (−72 dB) empêche
+       la sortie de se rendormir, même aux tempos lents. */
+    const WARMUP = 0.3;
+    function keepAlive(on) {
+      if (on && !state.keepAlive) {
+        const ac = state.audio, src = ac.createBufferSource(), g = ac.createGain();
+        src.buffer = noise(ac);
+        src.loop = true;
+        g.gain.value = 0.00025;
+        src.connect(g).connect(ac.destination); /* hors volume : doit rester actif */
+        src.start();
+        state.keepAlive = src;
+      } else if (!on && state.keepAlive) {
+        state.keepAlive.stop();
+        state.keepAlive = null;
+      }
+    }
+
+    /* nombre de temps de la préparation (levée : 1 ; décompte : mesures entières) */
+    function prepBeats() {
+      return state.prep === "levee" ? 1 : Number(state.prep) * meter().groups.length;
+    }
+
     /* (re)part du début de la mesure, précédé de la préparation :
        - levée : 1 temps muet, le dernier de la mesure (le plus long en 7/8 2+2+3) ;
-       - décompte : 1 ou 2 mesures entières, audibles, accent sur le 1. */
-    function beginBar() {
+       - décompte : 1 ou 2 mesures entières, audibles, accent sur le 1.
+       lead : délai avant la préparation (WARMUP au démarrage, sortie encore en veille). */
+    function beginBar(lead = START_DELAY) {
       const m = meter();
       const levee = state.prep === "levee";
       const prep = levee ? m.groups[m.groups.length - 1] : m.len * Number(state.prep);
       state.audibleFrom = levee ? 0 : -prep;
-      state.beatZero = state.audio.currentTime + START_DELAY + prep * pulseDur();
+      state.beatZero = state.audio.currentTime + lead + prep * pulseDur();
       state.schedSub = null;
       state.pending = [];
       $("beatView").textContent = levee ? "préparation" : "décompte";
@@ -697,13 +682,15 @@
       state.running = true;
       $("start").textContent = "Arrêter";
       $("start").classList.add("stop");
-      beginBar();
+      keepAlive(true);
+      beginBar(WARMUP);
       ticker.start();
       keepAwake(true);
     }
     function stop() {
       cancelFuture();
       state.running = false;
+      keepAlive(false);
       ticker.stop();
       keepAwake(false);
       invalidate();
@@ -725,8 +712,8 @@
     const SETTINGS_KEY = "metronome-reglages";
     function saveSettings() {
       if (!ready) return; /* pas pendant la restauration au démarrage */
-      const { bpm, mode, sig, sub, sound, prep, theme, timbre, volume } = state;
-      const data = { bpm, mode, sig, sub, sound, prep, theme, timbre, volume };
+      const { bpm, mode, sig, sub, sound, prep, theme, volume } = state;
+      const data = { bpm, mode, sig, sub, sound, prep, theme, volume };
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (err) {}
     }
     function loadSettings() {
@@ -829,7 +816,7 @@
       updateSettingsView();
       saveSettings();
     };
-    /* Aperçu du son (à l'arrêt) : le 1 puis deux temps, pour entendre l'écart d'accent */
+    /* Aperçu du volume (à l'arrêt) : le 1 puis deux temps */
     function preview() {
       if (state.running || !state.sound) return;
       const ac = ensureAudio();
@@ -837,12 +824,6 @@
       const t = ac.currentTime + 0.05;
       [2, 1, 1].forEach((level, i) => clickAt(t + i * 0.4, level));
     }
-    $("timbre").onchange = (e) => {
-      state.timbre = e.target.value;
-      resched(); /* les clics déjà programmés prennent le nouveau son */
-      saveSettings();
-      if (ready) preview();
-    };
     function setVolume(v) {
       state.volume = Math.max(0, Math.min(1, v));
       $("volume").value = Math.round(state.volume * 100);
@@ -1144,7 +1125,9 @@
     function render() {
       const w = stage.clientWidth, h = stage.clientHeight;
       ctx.clearRect(0, 0, w, h);
-      let beats = -1; /* à l'arrêt : position de départ de la préparation (dernier temps) */
+      /* à l'arrêt : position de départ de la préparation (levée : le dernier temps ;
+         décompte : le 1 de la mesure de décompte) */
+      let beats = -prepBeats();
       if (state.audio) {
         const heard = heardTime();
         /* chaque temps s'affiche quand il est entendu, pas quand il est programmé */
@@ -1155,7 +1138,8 @@
         }
         /* décroissance en fonction du temps, identique à 60 Hz ou 120 Hz */
         state.flash = Math.exp(-Math.max(0, heard - state.flashAt) / 0.11);
-        if (state.running) beats = beatsAt(heard);
+        /* pendant le réveil de la sortie audio, le point attend à sa position de départ */
+        if (state.running) beats = Math.max(beatsAt(heard), -prepBeats());
       }
       if (state.mode === "pendule") drawPendulum(w, h, beats);
       else drawChef(w, h, beats);
@@ -1188,8 +1172,6 @@
     $("prep").onchange({ target: $("prep") });
     if (["auto", "light", "dark"].includes(saved.theme)) $("theme").value = saved.theme;
     $("theme").onchange({ target: $("theme") });
-    if (saved.timbre in SOUNDS) $("timbre").value = saved.timbre;
-    $("timbre").onchange({ target: $("timbre") });
     setVolume(Number.isFinite(saved.volume) ? saved.volume : $("volume").value / 100);
     let savedOffset = 0;
     try { savedOffset = Number(localStorage.getItem(OFFSET_KEY)) || 0; } catch (err) {}
