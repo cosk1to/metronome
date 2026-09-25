@@ -337,13 +337,13 @@
     </section>
   </main>
   <footer>
-    <p id="hint">Suis le bout de la baguette (chef vu de face) : le temps tombe au rebond. Double appui : plein écran.</p>
+    <p>Suis le bout de la baguette (chef vu de face) : le temps tombe au rebond. Double appui : plein écran.</p>
     <p class="keys">
       <kbd>Espace</kbd> démarrer / arrêter · <kbd>↑</kbd> <kbd>↓</kbd> ±1 BPM ·
       <kbd>←</kbd> <kbd>→</kbd> ±5 BPM · <kbd>T</kbd> tap tempo
     </p>
     <!-- à changer à chaque mise en ligne : permet de vérifier que l'app est à jour -->
-    <p class="version">version 22</p>
+    <p class="version">version 23</p>
   </footer>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -383,7 +383,6 @@
       running: false,
       bpm: 92,
       sig: "4/4",
-      beats: 4,
       sub: 0,       /* clics par pulsation ; 0 = temps seuls */
       sound: true,
       prep: "levee", /* départ : "levee" (1 temps muet) ou nombre de mesures de décompte */
@@ -840,7 +839,6 @@
       state.sub = pick;
     }
 
-    /* consigne de lecture propre à chaque mode */
     /* Plein écran de la zone du métronome par double appui (doigt ou souris) : la
        zone occupe toute la fenêtre. Volontairement pas le plein écran du système :
        sur Android, sa notification de sortie provoquait un son parasite quand on
@@ -876,7 +874,6 @@
     $("sig").onchange = (e) => {
       state.sig = e.target.value;
       const m = meter();
-      state.beats = m.groups.length;
       $("sigView").textContent = m.label;
       $("unitView").textContent = m.note ? "BPM " + m.note : "BPM"; /* ce que compte le tempo */
       updateSubOptions();
