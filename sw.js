@@ -3,7 +3,7 @@
    par le cache HTTP du navigateur (GitHub Pages le garde 10 min) : une nouvelle
    version en ligne est prise dès la réouverture. Changer VERSION à chaque
    mise en ligne de ce fichier, des icônes ou du manifeste. */
-const VERSION = "metronome-v2";
+const VERSION = "metronome-v3";
 const FILES = [
   "./",
   "./index.html",

@@ -1,7 +1,7 @@
 {
   "name": "Métronome visuel",
   "short_name": "Métronome",
-  "description": "Métronome visuel : pendule ou chef d’orchestre, pour suivre le temps des yeux.",
+  "description": "Métronome visuel : suivre le temps des yeux, au geste d’un chef d’orchestre.",
   "lang": "fr",
   "start_url": "./",
   "scope": "./",
